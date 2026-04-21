@@ -1,0 +1,15 @@
+## Interface: 120005
+## Title: Speaketh
+## Notes: Auto-translate chat into WoW racial languages and Shath'Yar. Switch languages via minimap button.
+## Author: BattRatt
+## Version: 1.0
+## SavedVariablesPerCharacter: Speaketh_Char
+
+Speaketh_Languages.lua
+Speaketh_Fluency.lua
+Speaketh_Dialects.lua
+Speaketh_Translate.lua
+Speaketh_Share.lua
+Speaketh_UI.lua
+Speaketh_Options.lua
+Speaketh.lua
