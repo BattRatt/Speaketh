@@ -28,6 +28,16 @@ local DEFAULTS = {
     showSplash           = false,   -- show splash on every login (first login only when false)
     showLockdownNotify   = false,   -- print a chat message when combat lockdown disables translation
     enableOOB      = true,    -- join hidden cross-player channel so non-grouped Speaketh users can decode each other's SAY/YELL
+    -- Per-channel translation toggles (all on by default)
+    chanSay          = true,
+    chanYell         = true,
+    chanParty        = true,
+    chanRaid         = true,
+    chanGuild        = true,
+    chanOfficer      = true,
+    chanInstance     = true,
+    chanWhisper      = true,
+    chanEmote        = true,
 }
 
 -- Chat types Speaketh will translate on send
@@ -117,7 +127,11 @@ end
 -- ============================================================
 
 local SPEAKETH_PREFIX = "Speaketh"
-local _pendingOriginals = {} -- sender name -> {original, langKey, time}
+-- sender name -> list of {original, langKey, time}
+-- A list (queue) rather than a single slot so that multi-part sends from
+-- addons like Emote Splitter (which fires PreSendText once per split post)
+-- each get their own cache entry and can be decoded independently.
+local _pendingOriginals = {}
 
 -- ============================================================
 -- Out-of-band (OOB) channel for decoding speech between Speaketh
@@ -316,29 +330,52 @@ local function BuildTranslatedMsg(msg, langKey)
     end
 end
 
--- Cache an original for later matching
+-- Cache an original for later matching.
+-- Uses a FIFO queue per sender so that multi-part sends (e.g. Emote Splitter
+-- splitting a long message into several sequential SendChatMessage calls) each
+-- get their own entry and can be decoded in order.
 local function CachePending(name, original, langKey)
-    _pendingOriginals[name] = {
+    if not _pendingOriginals[name] then
+        _pendingOriginals[name] = {}
+    end
+    table.insert(_pendingOriginals[name], {
         original = original,
         langKey  = langKey,
         time     = GetTime(),
-    }
+    })
 end
 
--- Pop matching cached original for a sender
+-- Peek at (but do not remove) the first matching cache entry for a sender.
+local function PeekPending(name, langTag)
+    local queue = _pendingOriginals[name]
+    if not queue then return nil end
+    local now = GetTime()
+    while queue[1] and now - queue[1].time > 10 do
+        table.remove(queue, 1)
+    end
+    for _, entry in ipairs(queue) do
+        if entry.langKey == langTag then return entry end
+    end
+    return nil
+end
+
+-- Pop (remove and return) the oldest matching cache entry for a sender.
 local function PopPending(sender, langTag)
     local now = GetTime()
-    for k, v in pairs(_pendingOriginals) do
-        if now - v.time > 10 then _pendingOriginals[k] = nil end
-    end
-
     local shortName = sender and (sender:match("^([^-]+)") or sender) or ""
     local playerName = UnitName("player")
     for _, name in ipairs({shortName, sender or "", playerName}) do
-        local entry = _pendingOriginals[name]
-        if entry and entry.langKey == langTag then
-            _pendingOriginals[name] = nil
-            return entry.original
+        local queue = _pendingOriginals[name]
+        if queue then
+            while queue[1] and now - queue[1].time > 10 do
+                table.remove(queue, 1)
+            end
+            for i, entry in ipairs(queue) do
+                if entry.langKey == langTag then
+                    table.remove(queue, i)
+                    return entry.original
+                end
+            end
         end
     end
     return nil
@@ -377,8 +414,14 @@ function Speaketh_SendOriginal(original, langKey, chatType, target)
 
     local payload = langKey .. "|" .. original
 
-    -- If whispering, send on whisper channel
+    -- If whispering, send on whisper channel and also cache under the target
+    -- name. WoW echoes outgoing whispers back as CHAT_MSG_WHISPER_INFORM with
+    -- sender = target, so the incoming chat filter needs to find the original
+    -- keyed by the target's name rather than our own.
     if chatType == "WHISPER" and target and target ~= "" then
+        local shortTarget = target:match("^([^-]+)") or target
+        CachePending(shortTarget, original, langKey)
+        if shortTarget ~= target then CachePending(target, original, langKey) end
         SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "WHISPER", target)
         return
     end
@@ -446,6 +489,24 @@ local function Speaketh_ProcessOutgoing(editBox)
 
     local chatType = (editBox.GetAttribute and editBox:GetAttribute("chatType")) or "SAY"
     if not TRANSLATE_ON_SEND[chatType] then return end
+
+    -- Per-channel toggle: skip translation if the user has disabled this channel
+    if Speaketh_Char then
+        local chanKey = ({
+            SAY            = "chanSay",
+            YELL           = "chanYell",
+            PARTY          = "chanParty",
+            PARTY_LEADER   = "chanParty",
+            RAID           = "chanRaid",
+            RAID_WARNING   = "chanRaid",
+            GUILD          = "chanGuild",
+            OFFICER        = "chanOfficer",
+            INSTANCE_CHAT  = "chanInstance",
+            WHISPER        = "chanWhisper",
+            EMOTE          = "chanEmote",
+        })[chatType]
+        if chanKey and Speaketh_Char[chanKey] == false then return end
+    end
 
     local langKey = Speaketh:GetLanguage()
     local dialect = Speaketh_Dialects and Speaketh_Dialects:GetActive()
@@ -676,6 +737,10 @@ local FILTER_EVENTS = {
     "CHAT_MSG_RAID", "CHAT_MSG_RAID_WARNING",
     "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER",
     "CHAT_MSG_WHISPER",
+    -- Outgoing whisper echo: WoW sends this back to us so we see our own
+    -- sent whisper in chat. Without filtering it the garbled text shows
+    -- instead of the original even at 100% fluency.
+    "CHAT_MSG_WHISPER_INFORM",
 }
 
 -- Incoming filter for CHAT_MSG_EMOTE. Emotes carry translated quoted spans
@@ -689,8 +754,20 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
     if not Speaketh_Languages or not Speaketh_Fluency then return false end
 
     -- We need a cached original to decode against. Peek without popping first
-    -- so we can check langKey before committing.
-    local pending = _pendingOriginals and _pendingOriginals[sender]
+    -- so we can check langKey before committing. Grab the first queued entry
+    -- for this sender directly, since the emote filter has no langTag to match on yet.
+    local shortSender = sender and (sender:match("^([^-]+)") or sender) or sender or ""
+    -- For self-emotes, sender may be blank in some WoW builds; fall back to player name.
+    local playerName = UnitName("player") or ""
+    local senderQueue = _pendingOriginals[shortSender]
+                     or _pendingOriginals[sender or ""]
+                     or _pendingOriginals[playerName]
+    if not senderQueue or not senderQueue[1] then return false end
+    local now = GetTime()
+    while senderQueue[1] and now - senderQueue[1].time > 10 do
+        table.remove(senderQueue, 1)
+    end
+    local pending = senderQueue[1]
     if not pending then return false end
 
     local langKey = pending.langKey
@@ -710,8 +787,11 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
     -- Only proceed if the emote actually contains a quoted span
     if not msg:find('"', 1, true) then return false end
 
-    -- Pop the original now that we know we'll use it
-    local original = PopPending(sender, langKey)
+    -- Pop the original now that we know we'll use it.
+    -- Try shortSender, full sender, and playerName (for self-emote echo).
+    local original = PopPending(shortSender, langKey)
+                  or PopPending(sender, langKey)
+                  or PopPending(playerName, langKey)
     if not original then return false end
 
     -- Build a list of original quoted spans from the cached original emote

@@ -4,7 +4,6 @@
 ## Author: BattRatt
 ## Version: 1.0
 ## SavedVariablesPerCharacter: Speaketh_Char
-## Category-enUS: Roleplay
 
 Speaketh_Languages.lua
 Speaketh_Fluency.lua

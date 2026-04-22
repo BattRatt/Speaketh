@@ -599,10 +599,51 @@ local function BuildGeneralPanel(panel)
         function(v) SetSV("showLockdownNotify", v) end)
     lockdownCB:SetPoint("TOPLEFT", splashCB, "BOTTOMLEFT", 0, -4)
 
+    -- ---- Channel enable/disable section ----
+    local chanHeader = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    chanHeader:SetPoint("TOPLEFT", lockdownCB, "BOTTOMLEFT", 0, -16)
+    chanHeader:SetText("Translate in channels:")
+    chanHeader:SetTextColor(1.0, 0.82, 0.0, 1)
+
+    local chanDefs = {
+        { key="chanSay",      label="/say",           tip="Translate messages sent in /say." },
+        { key="chanYell",     label="/yell",          tip="Translate messages sent in /yell." },
+        { key="chanParty",    label="/party & /raid", tip="Translate messages sent in /party and /raid." },
+        { key="chanGuild",    label="/guild & /officer", tip="Translate messages sent in /guild and /officer." },
+        { key="chanInstance", label="/instance",      tip="Translate messages sent in instance chat." },
+        { key="chanWhisper",  label="/whisper",       tip="Translate messages sent as whispers." },
+        { key="chanEmote",    label="/emote",         tip="Translate quoted speech inside /emote messages." },
+    }
+
+    local chanCBs = {}
+    local prevAnchor = chanHeader
+    local prevAnchorPoint = "BOTTOMLEFT"
+    -- Two-column layout: left col = entries 1-4, right col = entries 5-7
+    for i, def in ipairs(chanDefs) do
+        local d = def  -- upvalue capture
+        local cb = MakeCheck(body,
+            d.label,
+            d.tip,
+            function() return SV()[d.key] ~= false end,
+            function(v) SetSV(d.key, v) end)
+        if i == 1 then
+            cb:SetPoint("TOPLEFT", chanHeader, "BOTTOMLEFT", 0, -4)
+        elseif i == 5 then
+            -- Start second column
+            cb:SetPoint("TOPLEFT", chanHeader, "BOTTOMLEFT", 180, -4)
+        elseif i < 5 then
+            cb:SetPoint("TOPLEFT", chanCBs[i-1], "BOTTOMLEFT", 0, -2)
+        else
+            cb:SetPoint("TOPLEFT", chanCBs[i-1], "BOTTOMLEFT", 0, -2)
+        end
+        chanCBs[i] = cb
+    end
+    local lastChanCB = chanCBs[#chanDefs < 4 and #chanDefs or 4]  -- bottom of left column
+
     -- Auto learn all languages
     local autoLearnBtn = GoldBtn(body, "")
     autoLearnBtn:SetSize(180, 24)
-    autoLearnBtn:SetPoint("TOPLEFT", lockdownCB, "BOTTOMLEFT", 0, -20)
+    autoLearnBtn:SetPoint("TOPLEFT", lastChanCB, "BOTTOMLEFT", 0, -20)
     autoLearnBtn:SetText("Auto learn languages")
     autoLearnBtn:SetScript("OnClick", function()
         local dlg = StaticPopup_Show("SPEAKETH_CONFIRM_AUTOLEARN")
@@ -662,6 +703,7 @@ local function BuildGeneralPanel(panel)
         hudCB.refresh()
         splashCB.refresh()
         lockdownCB.refresh()
+        for _, cb in ipairs(chanCBs) do cb.refresh() end
     end
 end
 
