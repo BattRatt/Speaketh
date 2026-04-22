@@ -25,7 +25,8 @@ local DEFAULTS = {
     dialectSubstitutesSeedVersion = 0, -- tracks whether built-in rules have been seeded
     customDialects = {},     -- user-created dialects: [key] = {name=string}
     customLanguages = {},    -- user-created languages: [key] = {name=string, words={...}}
-    showSplash     = false,   -- show splash on every login (first login only when false)
+    showSplash           = false,   -- show splash on every login (first login only when false)
+    showLockdownNotify   = true,    -- print a chat message when combat lockdown disables translation
     enableOOB      = true,    -- join hidden cross-player channel so non-grouped Speaketh users can decode each other's SAY/YELL
 }
 
@@ -495,30 +496,34 @@ local function Speaketh_ProcessOutgoing(editBox)
     _inTranslation = false
 end
 
--- Hook each chat editbox's OnEnterPressed script. Our wrapper modifies
--- the text FIRST, then calls the original handler which reads the
--- now-modified text and sends it to the server.
-local function Speaketh_HookEditBox(editBox)
-    if editBox._speaketh_hooked then return end
-    editBox._speaketh_hooked = true
-
-    local originalHandler = editBox:GetScript("OnEnterPressed")
-    editBox:SetScript("OnEnterPressed", function(self, ...)
-        -- Translate text in the editbox (wrapped in pcall so a translation
-        -- error can never block the chat send itself — if our code dies,
-        -- the original handler still runs with the unmodified text).
-        pcall(Speaketh_ProcessOutgoing, self)
-        if originalHandler then
-            originalHandler(self, ...)
-        end
-    end)
+-- Returns true when any chat messaging lockdown is active (combat, boss,
+-- M+, rated PvP). Mirrors the pattern used by EmoteScribe/Enscriber so
+-- that both InCombatLockdown and the newer C_ChatInfo gate are covered.
+local function Speaketh_IsLocked()
+    if InCombatLockdown and InCombatLockdown() then return true end
+    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown then
+        if C_ChatInfo.InChatMessagingLockdown() then return true end
+    end
+    return false
 end
 
+-- Hook via ChatFrame.OnEditBoxPreSendText, which fires inside the secure
+-- hardware-event chain BEFORE Blizzard calls SendText/SendChatMessage.
+-- This is the only approach that avoids tainting the protected send path
+-- in Midnight 12.0.5+. SetScript("OnEnterPressed") spreads taint onto the
+-- editbox and causes ADDON_ACTION_BLOCKED; the EventRegistry callback does not.
+local _speaketh_presend_hooked = false
 local function Speaketh_InstallSendHook()
-    for i = 1, NUM_CHAT_WINDOWS do
-        local eb = _G["ChatFrame" .. i .. "EditBox"]
-        if eb then Speaketh_HookEditBox(eb) end
-    end
+    if _speaketh_presend_hooked then return end
+    _speaketh_presend_hooked = true
+
+    EventRegistry:RegisterCallback(
+        "ChatFrame.OnEditBoxPreSendText",
+        function(_, editBox)
+            if Speaketh_IsLocked() then return end
+            pcall(Speaketh_ProcessOutgoing, editBox)
+        end
+    )
 end
 
 -- ============================================================
@@ -717,6 +722,8 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")  -- combat / lockdown begins
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")   -- combat / lockdown ends
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -788,8 +795,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             Speaketh_Char.language = DEFAULTS.language
         end
 
-        -- Hook SendChatMessage so outgoing chat gets translated.
-        -- This is safe inside instanced / rated content.
+        -- Register the pre-send editbox callback so outgoing chat gets
+        -- translated. Uses EventRegistry ChatFrame.OnEditBoxPreSendText
+        -- which runs inside the secure hardware-event chain and does not
+        -- taint SendChatMessage.
         Speaketh_InstallSendHook()
 
         -- Register incoming chat filters for partial understanding
@@ -842,6 +851,21 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         elseif not Speaketh_Char.splashSeen then
             Speaketh_UI:ShowSplash()
             Speaketh_Char.splashSeen = true
+        end
+
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        -- Combat / instance lockdown has begun. Translation is suspended to
+        -- avoid tainting protected frames (ADDON_ACTION_BLOCKED on SendChatMessage).
+        if Speaketh_Char and Speaketh_Char.showLockdownNotify ~= false then
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00[Speaketh]|r Combat lockdown active -- translation temporarily disabled.")
+        end
+
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        -- Combat / lockdown has ended; translation resumes automatically.
+        if Speaketh_Char and Speaketh_Char.showLockdownNotify ~= false then
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00[Speaketh]|r Lockdown lifted -- translation resumed.")
         end
     end
 end)
