@@ -894,6 +894,9 @@ function Speaketh_UI:ShowSplash()
         f:SetScript("OnDragStop",  f.StopMovingOrSizing)
         f:SetClampedToScreen(true)
 
+        -- Escape closes the splash like any native Blizzard dialog.
+        tinsert(UISpecialFrames, "SpeakethSplash")
+
         if f.SetBackdrop then
             f:SetBackdrop({
                 bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
