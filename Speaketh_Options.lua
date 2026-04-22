@@ -595,7 +595,7 @@ local function BuildGeneralPanel(panel)
     local lockdownCB = MakeCheck(body,
         "Show Lockdown Notifications",
         "Print a message in chat when combat lockdown begins or ends, indicating whether translation is active.",
-        function() return SV().showLockdownNotify ~= false end,
+        function() return SV().showLockdownNotify == true end,
         function(v) SetSV("showLockdownNotify", v) end)
     lockdownCB:SetPoint("TOPLEFT", splashCB, "BOTTOMLEFT", 0, -4)
 
@@ -661,6 +661,7 @@ local function BuildGeneralPanel(panel)
         mmCB.refresh()
         hudCB.refresh()
         splashCB.refresh()
+        lockdownCB.refresh()
     end
 end
 

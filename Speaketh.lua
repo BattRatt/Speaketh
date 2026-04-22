@@ -26,7 +26,7 @@ local DEFAULTS = {
     customDialects = {},     -- user-created dialects: [key] = {name=string}
     customLanguages = {},    -- user-created languages: [key] = {name=string, words={...}}
     showSplash           = false,   -- show splash on every login (first login only when false)
-    showLockdownNotify   = true,    -- print a chat message when combat lockdown disables translation
+    showLockdownNotify   = false,   -- print a chat message when combat lockdown disables translation
     enableOOB      = true,    -- join hidden cross-player channel so non-grouped Speaketh users can decode each other's SAY/YELL
 }
 
@@ -931,14 +931,14 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- Combat / instance lockdown has begun. Translation is suspended to
         -- avoid tainting protected frames (ADDON_ACTION_BLOCKED on SendChatMessage).
-        if Speaketh_Char and Speaketh_Char.showLockdownNotify ~= false then
+        if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cffffcc00[Speaketh]|r Combat lockdown active -- translation temporarily disabled.")
         end
 
     elseif event == "PLAYER_REGEN_ENABLED" then
         -- Combat / lockdown has ended; translation resumes automatically.
-        if Speaketh_Char and Speaketh_Char.showLockdownNotify ~= false then
+        if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cffffcc00[Speaketh]|r Lockdown lifted -- translation resumed.")
         end
