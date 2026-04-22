@@ -588,10 +588,17 @@ local function BuildGeneralPanel(panel)
         function(v) SetSV("showSplash", v) end)
     splashCB:SetPoint("TOPLEFT", hudCB, "BOTTOMLEFT", 0, -4)
 
+    local lockdownCB = MakeCheck(body,
+        "Show Lockdown Notifications",
+        "Print a message in chat when combat lockdown begins or ends, indicating whether translation is active.",
+        function() return SV().showLockdownNotify ~= false end,
+        function(v) SetSV("showLockdownNotify", v) end)
+    lockdownCB:SetPoint("TOPLEFT", splashCB, "BOTTOMLEFT", 0, -4)
+
     -- Auto learn all languages
     local autoLearnBtn = GoldBtn(body, "")
     autoLearnBtn:SetSize(180, 24)
-    autoLearnBtn:SetPoint("TOPLEFT", splashCB, "BOTTOMLEFT", 0, -20)
+    autoLearnBtn:SetPoint("TOPLEFT", lockdownCB, "BOTTOMLEFT", 0, -20)
     autoLearnBtn:SetText("Auto learn languages")
     autoLearnBtn:SetScript("OnClick", function()
         local dlg = StaticPopup_Show("SPEAKETH_CONFIRM_AUTOLEARN")
