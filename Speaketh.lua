@@ -88,7 +88,6 @@ function Speaketh:SetLanguage(key)
         return
     end
     Speaketh_Char.language = key
-    Speaketh_Fluency:EnsureNative(key)
 
     local fluency = Speaketh_Fluency:Get(key)
     DEFAULT_CHAT_FRAME:AddMessage(string.format(
@@ -1072,7 +1071,7 @@ function Speaketh_UI:ShowSplash()
         local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         ver:SetPoint("LEFT", title, "RIGHT", 8, -1)
         ver:SetTextColor(0.55, 0.55, 0.60, 1)
-        ver:SetText("v1.0  —  Roleplay Language Addon")
+        ver:SetText("v1.0.2  —  Roleplay Language Addon")
 
         local div1 = f:CreateTexture(nil, "ARTWORK")
         div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)

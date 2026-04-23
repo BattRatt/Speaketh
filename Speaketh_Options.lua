@@ -656,6 +656,11 @@ local function BuildGeneralPanel(panel)
                     if Speaketh_UI and Speaketh_UI.RefreshWindow then
                         Speaketh_UI:RefreshWindow()
                     end
+                    -- Refresh the options panel so language lists, fluency labels, etc. update immediately
+                    if _categoryPanels and _activeKey and _categoryPanels[_activeKey]
+                       and _categoryPanels[_activeKey].refresh then
+                        _categoryPanels[_activeKey].refresh()
+                    end
                     DEFAULT_CHAT_FRAME:AddMessage(
                         "|cffffcc00[Speaketh]|r All languages set to 100%% fluency.")
                 end
@@ -678,6 +683,11 @@ local function BuildGeneralPanel(panel)
                     end
                     if Speaketh_UI and Speaketh_UI.RefreshWindow then
                         Speaketh_UI:RefreshWindow()
+                    end
+                    -- Refresh the options panel so language lists, fluency labels, etc. update immediately
+                    if _categoryPanels and _activeKey and _categoryPanels[_activeKey]
+                       and _categoryPanels[_activeKey].refresh then
+                        _categoryPanels[_activeKey].refresh()
                     end
                     DEFAULT_CHAT_FRAME:AddMessage(
                         "|cffffcc00[Speaketh]|r All language fluency reset to 0%%.")
@@ -1490,7 +1500,7 @@ local function BuildAboutPanel(panel)
 
     local ver = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     ver:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
-    ver:SetText("Speaketh  |cffaaaaaa v1.0|r")
+    ver:SetText("Speaketh  |cffaaaaaa v1.0.2|r")
 
     -- Features
     local featHead = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")

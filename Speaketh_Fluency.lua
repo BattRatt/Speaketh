@@ -77,7 +77,10 @@ function Speaketh_Fluency:SeedDefaults()
         end
 
         if isRacial or isFaction then
-            if self:Get(key) < 100 then
+            -- Only seed if the player has never explicitly set this language.
+            -- Checking for nil (key absent) rather than < 100 ensures that an
+            -- intentional reset to 0 (or any value) is never overwritten on reload.
+            if Speaketh_Char.fluency[key] == nil then
                 self:Set(key, 100)
             end
         end
