@@ -271,7 +271,7 @@ end
 -- Translates msg in langKey, prepending a [Language] tag when needed.
 -- Returns CLEAN translated string — no payload.
 -- If langKey is "None", only dialect transformations are applied.
-local function BuildTranslatedMsg(msg, langKey, skipLengthGuard)
+local function BuildTranslatedMsg(msg, langKey)
     local originalMsg = msg
     -- Apply dialect substitutions + slurring before translation
     if Speaketh_Dialects and Speaketh_Dialects.Apply then
