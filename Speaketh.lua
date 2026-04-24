@@ -271,7 +271,7 @@ end
 -- Translates msg in langKey, prepending a [Language] tag when needed.
 -- Returns CLEAN translated string — no payload.
 -- If langKey is "None", only dialect transformations are applied.
-local function BuildTranslatedMsg(msg, langKey, skipLengthGuard)
+local function BuildTranslatedMsg(msg, langKey)
     local originalMsg = msg
     -- Apply dialect substitutions + slurring before translation
     if Speaketh_Dialects and Speaketh_Dialects.Apply then
@@ -311,14 +311,12 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard)
 
     local translated = Speaketh_Translate:Message(msg, langKey)
 
-    -- Apply the speaker's own fluency to the outgoing message.
-    -- At 100% fluency the message is fully translated (scrambled).
-    -- At lower fluency, some words slip through in their original form —
-    -- mirroring what listeners at the same fluency level would see.
-    local speakerFluency = Speaketh_Fluency:Get(langKey)
-    if speakerFluency < 100 then
-        translated = BlendMessages(msg, translated, speakerFluency)
-    end
+    -- Note: we do NOT blend the outgoing text by speaker fluency here.
+    -- The message sent over the wire is always fully translated, so other
+    -- players and our own overhead speech bubble see consistent garbled
+    -- output regardless of our fluency level. The incoming chat filter in
+    -- Speaketh_ChatFilter handles fluency blending for the chat window by
+    -- popping the cached original and mixing it with the received body.
 
     -- Insert interjections AFTER translation so they stay as literal text
     if Speaketh_Dialects and Speaketh_Dialects.ApplyInterjections then
@@ -333,16 +331,72 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard)
     end
 
     -- WoW silently drops chat messages longer than 255 bytes. Some languages
-    -- (like Gilnean rhyming slang) expand short input into much longer output,
-    -- which can push past the limit and cause the player's message to vanish
-    -- entirely. If we'd exceed the safe limit, fall back to the original
-    -- untranslated text — partial translation is better than no message at all.
+    -- (Gilnean in particular) expand input words into longer phrases, so even
+    -- a 255-byte input can translate to 400+ bytes. Without a splitter addon,
+    -- we can't send multiple chunks — but we can fit as many words as possible
+    -- rather than bailing to untranslated text.
+    --
+    -- Strategy: if the translated result is too long, binary-search on the
+    -- input word count — retranslate progressively fewer words until the
+    -- result fits. This guarantees the sent message is always in the target
+    -- language and as complete as the byte budget allows.
+    --
     -- skipLengthGuard: set by TranslateChunk, which pre-sizes chunks via
     -- GetTagOverhead so the translated result is guaranteed to fit.
     if not skipLengthGuard and #finalMsg > 250 then
-        -- Too long. Return the original so the send still happens.
-        -- Use the original with dialect applied but no language translation.
-        return originalMsg, nil
+        -- Split the dialect-processed input into words (preserving separators)
+        local words = {}
+        local seps  = {}
+        local s = msg
+        -- tokenise: alternate sep / word
+        local cur = 1
+        while cur <= #s do
+            local ws, we = s:find("[%a'%-]+", cur)
+            if ws then
+                table.insert(seps,  s:sub(cur, ws - 1))
+                table.insert(words, s:sub(ws, we))
+                cur = we + 1
+            else
+                table.insert(seps, s:sub(cur))
+                break
+            end
+        end
+
+        local tagPrefix = isNativeBlizz and "" or
+            ("[" .. Speaketh:GetLanguageDisplayName(langKey) .. "] ")
+        local LIMIT = 250 - #tagPrefix
+
+        -- Binary search: find the largest word count whose translation fits.
+        local lo, hi = 1, #words
+        local bestMsg = ""
+        while lo <= hi do
+            local mid = math.floor((lo + hi) / 2)
+            -- Reassemble the first `mid` words with their separators
+            local parts = {}
+            for i = 1, mid do
+                table.insert(parts, (seps[i] or ""))
+                table.insert(parts, words[i])
+            end
+            if seps[mid + 1] then table.insert(parts, seps[mid + 1]) end
+            local candidate = table.concat(parts)
+            local tCandidate = Speaketh_Translate:Message(candidate, langKey)
+            if Speaketh_Dialects and Speaketh_Dialects.ApplyInterjections then
+                tCandidate = Speaketh_Dialects:ApplyInterjections(tCandidate)
+            end
+            if #tCandidate <= LIMIT then
+                bestMsg = tagPrefix .. tCandidate
+                lo = mid + 1
+            else
+                hi = mid - 1
+            end
+        end
+
+        if bestMsg ~= "" then
+            finalMsg = bestMsg
+        else
+            -- Absolute fallback: single word still too long — hard truncate.
+            finalMsg = (tagPrefix .. Speaketh_Translate:Message(words[1] or msg, langKey)):sub(1, 250)
+        end
     end
 
     if isNativeBlizz then
@@ -803,6 +857,14 @@ addonMsgFrame:SetScript("OnEvent", function(self, event, prefix, payload, dist, 
     if not langKey or not original then return end
 
     local shortName = sender:match("^([^-]+)") or sender
+    local playerName = UnitName("player") or ""
+    -- Skip self-echoes. When we broadcast on GUILD/RAID/OOB/etc., WoW echoes
+    -- each broadcast back to us as CHAT_MSG_ADDON. Speaketh_SendOriginal has
+    -- already cached the message once under the player name; re-caching on
+    -- every channel echo would stack multiple duplicate entries in the FIFO
+    -- queue and cause stale or repeated chat output.
+    if shortName == playerName or sender == playerName then return end
+
     CachePending(shortName, original, langKey)
     if sender ~= shortName then
         CachePending(sender, original, langKey)
@@ -850,9 +912,18 @@ local function BlendMessages(original, translated, fluency)
     end
 
     local total = math.max(wordCount, #origWords)
+
+    -- Build a deterministic per-word reveal table. The old formula
+    -- (i*7 + total*13) % 100 clustered seeds around ~20 for short messages,
+    -- meaning nothing was ever revealed below ~20% fluency. Instead use a
+    -- simple LCG seeded from the message content so seeds spread uniformly
+    -- across 0-99 regardless of message length.
+    local seed = 0
+    for i = 1, #original do seed = (seed * 31 + original:byte(i)) % 100 end
     local revealed = {}
     for i = 1, total do
-        local seed = (i * 7 + total * 13) % 100
+        -- LCG step: produces a different value in 0-99 for each word index
+        seed = (seed * 1664525 + 1013904223) % 100
         revealed[i] = (seed < fluency)
     end
 
