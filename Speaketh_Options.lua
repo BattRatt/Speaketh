@@ -1500,7 +1500,8 @@ local function BuildAboutPanel(panel)
 
     local ver = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     ver:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
-    ver:SetText("Speaketh  |cffaaaaaa v1.0.2|r")
+    local versionLocal = C_AddOns.GetAddOnMetadata("Speaketh", "Version")
+    ver:SetText("Speaketh  |cffaaaaaa" .. versionLocal .. "|r")
 
     -- Features
     local featHead = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
