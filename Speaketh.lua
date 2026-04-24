@@ -1265,11 +1265,12 @@ function Speaketh_UI:ShowSplash()
         title:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -14)
         title:SetText("Speaketh")
         title:SetTextColor(1, 1, 1, 1)
-
+	
+	local versionLocal = C_AddOns.GetAddOnMetadata("Speaketh", "Version") or "?.?.?"
         local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         ver:SetPoint("LEFT", title, "RIGHT", 8, -1)
         ver:SetTextColor(0.55, 0.55, 0.60, 1)
-        ver:SetText("v1.0.2  —  Roleplay Language Addon")
+        ver:SetText("v" .. versionLocal .. "  —  Roleplay Language Addon")
 
         local div1 = f:CreateTexture(nil, "ARTWORK")
         div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)
