@@ -52,6 +52,27 @@ local DIALECT_QUOTES_ONLY = {
     EMOTE=true,
 }
 
+-- Maps chat types to their per-channel saved-variable toggle key.
+-- Shared between Speaketh_ProcessOutgoing and the splitter API.
+local CHAN_KEY_MAP = {
+    SAY            = "chanSay",
+    YELL           = "chanYell",
+    PARTY          = "chanParty",
+    PARTY_LEADER   = "chanParty",
+    RAID           = "chanRaid",
+    RAID_WARNING   = "chanRaid",
+    GUILD          = "chanGuild",
+    OFFICER        = "chanOfficer",
+    INSTANCE_CHAT  = "chanInstance",
+    WHISPER        = "chanWhisper",
+    EMOTE          = "chanEmote",
+}
+
+-- Set true by an external chat-splitting addon (e.g. EmoteScribe) while it
+-- is handling the outgoing send. Prevents Speaketh's own editbox hook from
+-- double-translating text the splitter has already processed.
+Speaketh.splitterBypassing = false
+
 -- ============================================================
 -- Language management
 -- ============================================================
@@ -250,7 +271,7 @@ end
 -- Translates msg in langKey, prepending a [Language] tag when needed.
 -- Returns CLEAN translated string — no payload.
 -- If langKey is "None", only dialect transformations are applied.
-local function BuildTranslatedMsg(msg, langKey)
+local function BuildTranslatedMsg(msg, langKey, skipLengthGuard)
     local originalMsg = msg
     -- Apply dialect substitutions + slurring before translation
     if Speaketh_Dialects and Speaketh_Dialects.Apply then
@@ -316,7 +337,9 @@ local function BuildTranslatedMsg(msg, langKey)
     -- which can push past the limit and cause the player's message to vanish
     -- entirely. If we'd exceed the safe limit, fall back to the original
     -- untranslated text — partial translation is better than no message at all.
-    if #finalMsg > 250 then
+    -- skipLengthGuard: set by TranslateChunk, which pre-sizes chunks via
+    -- GetTagOverhead so the translated result is guaranteed to fit.
+    if not skipLengthGuard and #finalMsg > 250 then
         -- Too long. Return the original so the send still happens.
         -- Use the original with dialect applied but no language translation.
         return originalMsg, nil
@@ -472,6 +495,9 @@ local _inTranslation = false
 local function Speaketh_ProcessOutgoing(editBox)
     if _inTranslation then return end
 
+    -- A chat-splitting addon has already handled translation for this send.
+    if Speaketh.splitterBypassing then return end
+
     -- If auto-chat is off, don't process normal chat editboxes
     if Speaketh_Char and Speaketh_Char.autoChat == false then return end
 
@@ -491,19 +517,7 @@ local function Speaketh_ProcessOutgoing(editBox)
 
     -- Per-channel toggle: skip translation if the user has disabled this channel
     if Speaketh_Char then
-        local chanKey = ({
-            SAY            = "chanSay",
-            YELL           = "chanYell",
-            PARTY          = "chanParty",
-            PARTY_LEADER   = "chanParty",
-            RAID           = "chanRaid",
-            RAID_WARNING   = "chanRaid",
-            GUILD          = "chanGuild",
-            OFFICER        = "chanOfficer",
-            INSTANCE_CHAT  = "chanInstance",
-            WHISPER        = "chanWhisper",
-            EMOTE          = "chanEmote",
-        })[chatType]
+        local chanKey = CHAN_KEY_MAP[chatType]
         if chanKey and Speaketh_Char[chanKey] == false then return end
     end
 
@@ -589,6 +603,190 @@ local function Speaketh_InstallSendHook()
             pcall(Speaketh_ProcessOutgoing, editBox)
         end
     )
+end
+
+-- ============================================================
+-- Splitter addon API
+--
+-- Exposes the translation pipeline so that a chat-splitting addon (e.g.
+-- EmoteScribe) can correctly translate each chunk independently, rather
+-- than letting Speaketh's editbox hook see only the first chunk.
+--
+-- Intended usage pattern for a splitting addon:
+--
+--   if Speaketh and Speaketh:WouldTranslate(chatType) then
+--       -- Reduce chunk size before splitting to leave room for the tag prefix.
+--       local overhead = Speaketh:GetTagOverhead(chatType)
+--       -- ... set your chunk size to (255 - overhead) for this send ...
+--
+--       -- After splitting, translate each chunk and handle its own cache entry:
+--       --   local translated = Speaketh:TranslateChunk(chunk, chatType, target)
+--       --   -- send `translated` instead of `chunk`
+--
+--       -- Suppress Speaketh's editbox hook so it doesn't double-translate chunk[1]:
+--       Speaketh.splitterBypassing = true
+--       -- ... dispatch your chunks ...
+--       Speaketh.splitterBypassing = false  -- or clear next frame via C_Timer
+--   end
+-- ============================================================
+
+-- Returns true if Speaketh would translate an outgoing message of chatType
+-- under the current user configuration. Respects autoChat, active language
+-- or dialect, fluency, and per-channel toggles.
+-- A splitting addon should call this before deciding to take over translation.
+function Speaketh:WouldTranslate(chatType)
+    if not Speaketh_Char then return false end
+    if Speaketh_Char.autoChat == false then return false end
+    if not chatType or not TRANSLATE_ON_SEND[chatType] then return false end
+
+    local chanKey = CHAN_KEY_MAP[chatType]
+    if chanKey and Speaketh_Char[chanKey] == false then return false end
+
+    local langKey = self:GetLanguage()
+    local dialect = Speaketh_Dialects and Speaketh_Dialects:GetActive()
+
+    if langKey == "None" then
+        -- No language translation, but a dialect may still transform the text.
+        return dialect ~= nil
+    end
+
+    if not Speaketh_Fluency then return false end
+    return Speaketh_Fluency:Get(langKey) > 0
+end
+
+-- Returns the number of bytes that Speaketh's [Language] tag prefix will add
+-- to each translated chunk for chatType (e.g. "[Dwarvish] " = 11 bytes).
+-- Returns 0 if no language is active or if no tag is prepended (dialect-only,
+-- native Blizzard language). A splitting addon should reduce its chunk size
+-- by this amount before splitting so the translated result fits in 255 bytes.
+function Speaketh:GetTagOverhead(chatType)
+    if not self:WouldTranslate(chatType) then return 0 end
+
+    local langKey = self:GetLanguage()
+    if langKey == "None" then return 0 end  -- dialect-only: no tag
+
+    local langData = Speaketh_Languages and Speaketh_Languages[langKey]
+    if not langData then return 0 end
+
+    -- Native Blizzard languages don't get the [Tag] prefix.
+    if langData.blizzard then
+        local numLangs = GetNumLanguages and GetNumLanguages() or 0
+        for i = 1, numLangs do
+            if GetLanguageByIndex(i) == langData.blizzard then return 0 end
+        end
+    end
+
+    -- "[" + display name + "] " = display name length + 3
+    return #self:GetLanguageDisplayName(langKey) + 3
+end
+
+-- Translate a single already-split chunk for sending on chatType, and handle
+-- the full originals cache/broadcast contract for that chunk independently.
+-- This is the correct call for a splitting addon to make once per chunk:
+--   • translates the chunk via the full pipeline (dialect + language + fluency)
+--   • caches the pre-translation chunk text locally under the player's name
+--     so the player's own incoming filter can decode the echo
+--   • broadcasts the original chunk text on group/guild/OOB addon channels
+--     so other Speaketh users can decode their incoming copy
+-- Returns the translated string (falls back to original on failure).
+-- For EMOTE, only quoted spans are translated (quotesOnly path).
+-- For dialect-only (language = "None"), no cache/broadcast is performed
+-- since there is no [Language] tag for the incoming filter to key on.
+-- target: whisper target name, or nil for non-whisper chat types.
+function Speaketh:TranslateChunk(msg, chatType, target)
+    if not msg or msg == "" then return msg end
+
+    local langKey    = self:GetLanguage()
+    local dialect    = Speaketh_Dialects and Speaketh_Dialects:GetActive()
+    local quotesOnly = DIALECT_QUOTES_ONLY[chatType]
+
+    if langKey == "None" then
+        -- Dialect-only: transform text but no cache/broadcast needed since
+        -- there is no [Language] tag for the receiver's filter to match on.
+        if not dialect then return msg end
+        local result
+        if quotesOnly then
+            result = ApplyDialectToQuotes(msg, langKey)
+        else
+            result = BuildTranslatedMsg(msg, langKey)
+        end
+        return (result and result ~= "") and result or msg
+    end
+
+    -- Language path: translate, then cache and broadcast the pre-translation
+    -- chunk so each incoming [Language] message can be decoded independently.
+    local translated
+    if quotesOnly then
+        translated = ApplyDialectToQuotes(msg, langKey)
+    else
+        -- skipLengthGuard=true: chunk was pre-sized by GetTagOverhead so the
+        -- translated result is guaranteed to fit within 255 bytes.
+        translated = BuildTranslatedMsg(msg, langKey, true)
+    end
+    if not translated or translated == "" then return msg end
+
+    -- Cache and broadcast this chunk's original text. Each chunk gets its own
+    -- entry in the FIFO queue so the receiver's PopPending call for each
+    -- arriving [Language] message pops the right original in order.
+    pcall(Speaketh_SendOriginal, msg, langKey, chatType, target)
+
+    return translated
+end
+
+-- Translate a single message line for sending on chatType.
+-- Applies dialect, language encoding, speaker fluency blend, and the
+-- [Language] tag prefix. For EMOTE, only quoted spans are translated.
+-- Returns: translatedMsg, langKey
+--   translatedMsg — the final string to send (never nil/empty; falls back
+--                   to the original if translation would produce garbage)
+--   langKey       — the active language key, or nil if language is "None"
+--                   or a native Blizzard language (no [Tag] prefix needed)
+-- The caller is responsible for calling BroadcastOriginal separately.
+-- Note: for per-chunk translation, prefer TranslateChunk which handles
+-- the cache/broadcast contract automatically.
+function Speaketh:TranslateOutgoing(msg, chatType)
+    if not msg or msg == "" then return msg, nil end
+
+    local langKey    = self:GetLanguage()
+    local dialect    = Speaketh_Dialects and Speaketh_Dialects:GetActive()
+    local quotesOnly = DIALECT_QUOTES_ONLY[chatType]
+
+    if langKey == "None" then
+        -- Dialect-only path: no language tag, no BroadcastOriginal needed.
+        if not dialect then return msg, nil end
+        local result
+        if quotesOnly then
+            result = ApplyDialectToQuotes(msg, langKey)
+        else
+            result = BuildTranslatedMsg(msg, langKey)
+        end
+        if not result or result == "" then return msg, nil end
+        return result, nil
+    end
+
+    -- Language translation path.
+    local translated, outLangKey
+    if quotesOnly then
+        translated = ApplyDialectToQuotes(msg, langKey)
+        outLangKey = langKey
+    else
+        translated, outLangKey = BuildTranslatedMsg(msg, langKey)
+    end
+
+    if not translated or translated == "" then return msg, nil end
+    return translated, outLangKey
+end
+
+-- Broadcast the pre-translation original so other Speaketh users in the
+-- group, guild, or OOB channel can decode the scrambled text.
+-- Call once per original line, before it is split, with the raw unsplit text.
+-- langKey: the value returned by TranslateOutgoing (may be nil for dialect-only).
+-- target:  whisper target name, or nil for non-whisper chat types.
+-- Note: for per-chunk translation, prefer TranslateChunk which handles
+-- the cache/broadcast contract automatically.
+function Speaketh:BroadcastOriginal(original, langKey, chatType, target)
+    if not langKey then return end  -- dialect-only: no decode payload needed
+    pcall(Speaketh_SendOriginal, original, langKey, chatType, target)
 end
 
 -- ============================================================
@@ -876,8 +1074,8 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")  -- combat / lockdown begins
-eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")   -- combat / lockdown ends
+eventFrame:RegisterEvent("ENCOUNTER_START")  -- combat / lockdown begins
+eventFrame:RegisterEvent("ENCOUNTER_END")   -- combat / lockdown ends
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -1007,19 +1205,19 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             Speaketh_Char.splashSeen = true
         end
 
-    elseif event == "PLAYER_REGEN_DISABLED" then
+    elseif event == "ENCOUNTER_END" then
         -- Combat / instance lockdown has begun. Translation is suspended to
         -- avoid tainting protected frames (ADDON_ACTION_BLOCKED on SendChatMessage).
         if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
-                "|cffffcc00[Speaketh]|r Combat lockdown active -- translation temporarily disabled.")
+                "|cffffcc00[Speaketh]|r Encounter Lockdown Ended: translation resumed.")
         end
 
-    elseif event == "PLAYER_REGEN_ENABLED" then
+    elseif event == "ENCOUNTER_START" then
         -- Combat / lockdown has ended; translation resumes automatically.
         if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
-                "|cffffcc00[Speaketh]|r Lockdown lifted -- translation resumed.")
+                "|cffffcc00[Speaketh]|r Encounter Lockdown Started: translation paused.")
         end
     end
 end)
@@ -1067,11 +1265,12 @@ function Speaketh_UI:ShowSplash()
         title:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -14)
         title:SetText("Speaketh")
         title:SetTextColor(1, 1, 1, 1)
-
+	
+	local versionLocal = C_AddOns.GetAddOnMetadata("Speaketh", "Version") or "?.?.?"
         local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         ver:SetPoint("LEFT", title, "RIGHT", 8, -1)
         ver:SetTextColor(0.55, 0.55, 0.60, 1)
-        ver:SetText("v1.0.2  —  Roleplay Language Addon")
+        ver:SetText("v" .. versionLocal .. "  —  Roleplay Language Addon")
 
         local div1 = f:CreateTexture(nil, "ARTWORK")
         div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)
