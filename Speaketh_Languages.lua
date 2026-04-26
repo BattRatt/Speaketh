@@ -238,10 +238,10 @@ Speaketh_Languages["Goblin"] = {
 Speaketh_Languages["Pandaren"] = {
     blizzard = "Pandaren", race = {"Pandaren"}, faction = nil,
     words = {
-        [1] = {"om","nom","mm","na","nu","mu"},
-        [2] = {"om nom","nom om","nom nom","om om","mm nom","nu om","na om","mu na"},
-        [3] = {"om nom nom","nom om om","nom nom nom","om om om","mm nom om","om na nom","nu nom om","mu om nom"},
-        [4] = {"om nom nom nom","nom om om om","nom nom nom nom","om om om om","mm nom nom om","om na nom nom","nu om nom nom","mu nom om nom"},
+        [1] = {"shan","li","mei","hao","jin","ren","tao","shu","yun","kai","lan","zen"},
+        [2] = {"shan li","mei hao","jin tao","ren shu","yun kai","lan zen","hao jin","shu mei","tao ren","kai lan"},
+        [3] = {"shan li tao","mei hao jin","ren shu kai","yun lan zen","tao jin ren","hao mei shu","kai shan li","lan yun tao"},
+        [4] = {"shan li tao ren","mei hao jin shu","yun kai lan zen","tao ren shan li","hao mei shu jin","kai lan tao ren","shu jin mei hao","lan zen yun kai"},
     }
 }
 
