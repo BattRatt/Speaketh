@@ -4,6 +4,7 @@
 ## Author: BattRatt
 ## Version: 1.0.3
 ## SavedVariablesPerCharacter: Speaketh_Char
+## IconTexture: Interface\AddOns\Speaketh\Resources\Speaketh32
 ## Category-enUS: Roleplay
 
 
