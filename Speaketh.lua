@@ -660,7 +660,7 @@ local function Speaketh_InstallSendHook()
 end
 
 -- ============================================================
--- Splitter addon API
+-- Splitter addon API by VfX/Bitwise1057
 --
 -- Exposes the translation pipeline so that a chat-splitting addon (e.g.
 -- EmoteScribe) can correctly translate each chunk independently, rather
