@@ -1662,12 +1662,6 @@ local function BuildFrame()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetClampedToScreen(true)
-    f:SetResizable(true)
-    if f.SetMinResize then
-        f:SetMinResize(WIN_W, WIN_H)
-    elseif f.SetResizeBounds then
-        f:SetResizeBounds(WIN_W, WIN_H)
-    end
     f:Hide()
 
     -- Rich dark parchment background
@@ -1761,22 +1755,6 @@ local function BuildFrame()
     sideDiv2:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE_W + 3,  20)
     sideDiv2:SetWidth(1)
     sideDiv2:SetColorTexture(0.72, 0.58, 0.25, 0.15)
-
-    -- Resize grip
-    local grip = CreateFrame("Button", nil, f)
-    grip:SetSize(16, 16)
-    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
-    local gripTex = grip:CreateTexture(nil, "OVERLAY")
-    gripTex:SetAllPoints()
-    gripTex:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    local gripTexH = grip:CreateTexture(nil, "OVERLAY")
-    gripTexH:SetAllPoints()
-    gripTexH:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-    gripTexH:Hide()
-    grip:SetScript("OnEnter", function() gripTexH:Show() end)
-    grip:SetScript("OnLeave", function() gripTexH:Hide() end)
-    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
-    grip:SetScript("OnMouseUp",   function() f:StopMovingOrSizing() end)
 
     _mainFrame = f
 
