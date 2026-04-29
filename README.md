@@ -1,5 +1,5 @@
 # Speaketh
-**v1.0** — Roleplay Language Addon for World of Warcraft
+**1.0.4** — Roleplay Language Addon for World of Warcraft
 *By BattRatt*
 
 ---
