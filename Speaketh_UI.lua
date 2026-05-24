@@ -577,59 +577,95 @@ local menuFrame = CreateFrame("Frame", "SpeakethMenuFrame", UIParent, "UIDropDow
 function Speaketh_UI:ShowLanguageMenu(anchor)
     local function init(frame, level)
         local info = UIDropDownMenu_CreateInfo()
-        info.text = "Choose Language"
-        info.isTitle = true
-        info.notCheckable = true
-        UIDropDownMenu_AddButton(info, level)
 
-        info = UIDropDownMenu_CreateInfo()
-        info.text    = "None  |cffaaaaaa(no translation)|r"
-        info.value   = "None"
-        info.checked = (Speaketh:GetLanguage() == "None")
-        info.notCheckable = false
-        info.func = function()
-            Speaketh:SetLanguage("None")
-            CloseDropDownMenus()
-            Speaketh_UI:RefreshWindow()
-        end
-        UIDropDownMenu_AddButton(info, level)
+        if level == 1 then
+            -- ── Language arrow ────────────────────────────────────
+            local curLang = Speaketh:GetLanguage()
+            local langLabel = (curLang == "None") and "None" or curLang
+            info.text         = string.format("Language  |cffaaaaaa(%s)|r", langLabel)
+            info.hasArrow     = true
+            info.notCheckable = true
+            info.value        = "LANG_SUBMENU"
+            UIDropDownMenu_AddButton(info, level)
 
-        info = UIDropDownMenu_CreateInfo()
-        info.text = " "
-        info.isTitle = true
-        info.notCheckable = true
-        UIDropDownMenu_AddButton(info, level)
+            -- ── Dialect arrow ─────────────────────────────────────
+            info = UIDropDownMenu_CreateInfo()
+            local activeDialect = Speaketh_Dialects:GetActive()
+            local dialectLabel  = activeDialect and Speaketh_Dialects:GetData(activeDialect).name or "None"
+            info.text         = string.format("Dialect  |cffaaaaaa(%s)|r", dialectLabel)
+            info.hasArrow     = true
+            info.notCheckable = true
+            info.value        = "DIALECT_SUBMENU"
+            UIDropDownMenu_AddButton(info, level)
 
-        for _, key in ipairs(Speaketh_LanguageOrder) do
-            local fluency = Speaketh_Fluency:Get(key)
-            if fluency > 0 then
+        elseif level == 2 then
+            if UIDROPDOWNMENU_MENU_VALUE == "LANG_SUBMENU" then
+                -- ── Language submenu ──────────────────────────────
+                info.text = "Language"
+                info.isTitle = true
+                info.notCheckable = true
+                UIDropDownMenu_AddButton(info, level)
+
                 info = UIDropDownMenu_CreateInfo()
-                info.text    = string.format("%s  |cffaaaaaa(%d%%)|r", key, math.floor(fluency))
-                info.value   = key
-                info.checked = (Speaketh:GetLanguage() == key)
+                info.text    = "None  |cffaaaaaa(no translation)|r"
+                info.checked = (Speaketh:GetLanguage() == "None")
                 info.notCheckable = false
-                info.func = function(btn)
-                    Speaketh:SetLanguage(btn.value)
+                info.func = function()
+                    Speaketh:SetLanguage("None")
                     CloseDropDownMenus()
                     Speaketh_UI:RefreshWindow()
                 end
                 UIDropDownMenu_AddButton(info, level)
-            end
-        end
 
-        info = UIDropDownMenu_CreateInfo()
-        info.text = "- Not yet learned -"
-        info.isTitle = true
-        info.notCheckable = true
-        UIDropDownMenu_AddButton(info, level)
+                for _, key in ipairs(Speaketh_LanguageOrder) do
+                    if Speaketh_Fluency:Get(key) > 0 then
+                        info = UIDropDownMenu_CreateInfo()
+                        info.text    = string.format("%s  |cffaaaaaa(%d%%)|r", key, math.floor(Speaketh_Fluency:Get(key)))
+                        info.value   = key
+                        info.checked = (Speaketh:GetLanguage() == key)
+                        info.notCheckable = false
+                        info.func = function(btn)
+                            Speaketh:SetLanguage(btn.value)
+                            CloseDropDownMenus()
+                            Speaketh_UI:RefreshWindow()
+                        end
+                        UIDropDownMenu_AddButton(info, level)
+                    end
+                end
 
-        for _, key in ipairs(Speaketh_LanguageOrder) do
-            if Speaketh_Fluency:Get(key) == 0 then
-                info = UIDropDownMenu_CreateInfo()
-                info.text = string.format("|cff555555%s|r", key)
+            elseif UIDROPDOWNMENU_MENU_VALUE == "DIALECT_SUBMENU" then
+                -- ── Dialect submenu ───────────────────────────────
+                info.text = "Dialect"
+                info.isTitle = true
                 info.notCheckable = true
-                info.disabled = true
                 UIDropDownMenu_AddButton(info, level)
+
+                info = UIDropDownMenu_CreateInfo()
+                info.text    = "None  |cffaaaaaa(no accent)|r"
+                info.checked = (Speaketh_Dialects:GetActive() == nil)
+                info.notCheckable = false
+                info.func = function()
+                    Speaketh_Dialects:SetActive(nil)
+                    CloseDropDownMenus()
+                    Speaketh_UI:RefreshWindow()
+                end
+                UIDropDownMenu_AddButton(info, level)
+
+                local _, dialectOrder = Speaketh_Dialects:GetAll()
+                for _, key in ipairs(dialectOrder) do
+                    local d = Speaketh_Dialects:GetData(key)
+                    info = UIDropDownMenu_CreateInfo()
+                    info.text    = d.name
+                    info.value   = key
+                    info.checked = (Speaketh_Dialects:GetActive() == key)
+                    info.notCheckable = false
+                    info.func = function(btn)
+                        Speaketh_Dialects:SetActive(btn.value)
+                        CloseDropDownMenus()
+                        Speaketh_UI:RefreshWindow()
+                    end
+                    UIDropDownMenu_AddButton(info, level)
+                end
             end
         end
     end
@@ -703,7 +739,7 @@ function Speaketh_UI:CreateLanguageHUD()
     hud:SetFrameStrata("MEDIUM")
     hud:SetClampedToScreen(true)
     hud:EnableMouse(true)
-    hud:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    hud:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
     hud:RegisterForDrag("LeftButton")
     hud:SetMovable(true)
 
@@ -755,7 +791,9 @@ function Speaketh_UI:CreateLanguageHUD()
     -- Click handlers
     hud:SetScript("OnClick", function(self, mouseButton)
         if self._dragging then return end
-        if mouseButton == "LeftButton" then
+        if mouseButton == "MiddleButton" then
+            if Speaketh and Speaketh.Toggle then Speaketh:Toggle() end
+        elseif mouseButton == "LeftButton" then
             Speaketh_UI:ShowLanguageMenu(self)
         elseif mouseButton == "RightButton" then
             Speaketh_UI:ToggleSpeakWindow()
@@ -766,6 +804,10 @@ function Speaketh_UI:CreateLanguageHUD()
     hud:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:AddLine("|cffffcc00Speaketh|r")
+        local enabled = Speaketh and Speaketh.IsEnabled and Speaketh:IsEnabled()
+        if enabled == false then
+            GameTooltip:AddLine("|cffff4444DISABLED|r")
+        end
         local lang = Speaketh:GetLanguage()
         if lang == "None" then
             GameTooltip:AddLine("Speaking: |cff88ccffNone|r")
@@ -776,6 +818,7 @@ function Speaketh_UI:CreateLanguageHUD()
         end
         GameTooltip:AddLine("|cffaaaaaaLeft-click: change language|r")
         GameTooltip:AddLine("|cffaaaaaaRight-click: open Speak Window|r")
+        GameTooltip:AddLine("|cffaaaaaaMiddle-click: toggle enable/disable|r")
         GameTooltip:AddLine("|cffaaaaaaDrag to move|r")
         GameTooltip:Show()
     end)
@@ -790,6 +833,12 @@ end
 function Speaketh_UI:RefreshLanguageHUD()
     if not self.LangHUD or not self.LangHUD.Label then return end
     local lang = Speaketh:GetLanguage()
+    local enabled = Speaketh and Speaketh.IsEnabled and Speaketh:IsEnabled()
+    if enabled == false then
+        self.LangHUD.Label:SetTextColor(0.55, 0.55, 0.55, 1)  -- greyed out
+    else
+        self.LangHUD.Label:SetTextColor(1.0, 0.82, 0.0, 1)    -- gold
+    end
     if lang == "None" then
         self.LangHUD.Label:SetText("None")
     else

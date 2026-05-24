@@ -73,115 +73,156 @@ local function ApplySubstitutes(text, subs, level)
 end
 
 -- ============================================================
--- Drunk slur engine (letter-level mangling)
+-- Drunk slur engine — modelled on WoW's own Tipsy → Smashed
+-- progression (inebriation levels 1-3 in the game client).
+--
+--  Level 1 – Tipsy:   Occasional 's'→'sh', rare letter stumbles.
+--                     Noticeable but still readable.  No caps chaos.
+--  Level 2 – Drunk:   Word-initial S→Sh, th→d more often, vowel
+--                     stretching, light random-caps and filler hiccups.
+--  Level 3 – Smashed: Heavy S→Sh everywhere, th→d, aggressive vowel
+--                     stretching, dropped/stumbled consonants, random
+--                     caps chaos, word-initial vowel gains a 'w'.
 -- ============================================================
+
+-- Tipsy: only the subtlest slipping — 's' between two letters becomes
+-- 'sh' rarely, and a letter doubles even more rarely.
 local function DrunkSlurLevel1(text)
-    text = text:gsub("([%a])s([%a])", function(b, a)
-        if math.random(1,100) <= 30 then return b.."sh"..a end
-        return b.."s"..a
+    -- s between two word-chars → sh (25% chance, WoW tipsy feel)
+    text = text:gsub("([%a])([Ss])([%a])", function(b, s, a)
+        if math.random(1,100) <= 25 then
+            return b .. (s=="S" and "Sh" or "sh") .. a
+        end
+        return b .. s .. a
     end)
+    -- Rare double-letter stumble (~4%)
     text = text:gsub("([%a])", function(c)
-        if math.random(1,100) <= 5 then return c..c end
+        if math.random(1,100) <= 4 then return c..c end
         return c
     end)
     return text
 end
 
+-- Drunk: S→Sh at word boundaries and mid-word, th→d, vowels stretch,
+-- very light random-caps (matches WoW's mid-drunk look).
 local function DrunkSlurLevel2(text)
-    text = text:gsub("([%a])s", function(b)
-        if math.random(1,100) <= 50 then return b.."sh" end
-        return b.."s"
-    end)
-    text = text:gsub("(%s)([Ss])", function(sp, s)
-        if math.random(1,100) <= 40 then
-            return sp..(s=="S" and "Sh" or "sh")
+    -- Word-initial S/s → Sh/sh (50% chance)
+    text = text:gsub("(%s)([Ss])([%a])", function(sp, s, a)
+        if math.random(1,100) <= 50 then
+            return sp .. (s=="S" and "Sh" or "sh") .. a
         end
-        return sp..s
+        return sp .. s .. a
     end)
-    text = text:gsub("[Tt]h", function(th)
+    -- Sentence-start S (very beginning of string)
+    text = text:gsub("^([Ss])([%a])", function(s, a)
+        if math.random(1,100) <= 50 then
+            return (s=="S" and "Sh" or "sh") .. a
+        end
+        return s .. a
+    end)
+    -- Mid-word s after a consonant → sh (40%)
+    text = text:gsub("([bcdfghjklmnpqrtvwxyzBCDFGHJKLMNPQRTVWXYZ])([Ss])", function(b, s)
+        if math.random(1,100) <= 40 then return b .. (s=="S" and "Sh" or "sh") end
+        return b .. s
+    end)
+    -- th/Th → d/D (35%)
+    text = text:gsub("([Tt]h)", function(th)
         if math.random(1,100) <= 35 then
             return th:sub(1,1)=="T" and "D" or "d"
         end
         return th
     end)
+    -- Vowel doubling (~12%)
     text = text:gsub("([aeiouAEIOU])", function(v)
-        if math.random(1,100) <= 15 then return v..v end
+        if math.random(1,100) <= 12 then return v..v end
         return v
     end)
-    text = text:gsub("([%a])", function(c)
-        if math.random(1,100) <= 8 then return c..c end
-        return c
-    end)
-    return text
-end
-
-local function DrunkSlurLevel3(text)
-    text = text:gsub("[Ss]", function(s)
-        if math.random(1,100) <= 70 then return s=="S" and "Sh" or "sh" end
-        return s
-    end)
-    text = text:gsub("[Tt]h", function(th)
-        if math.random(1,100) <= 60 then return th:sub(1,1)=="T" and "D" or "d" end
-        return th
-    end)
-    text = text:gsub("([aeiouAEIOU])", function(v)
-        local r = math.random(1,100)
-        if r <= 25 then return v..v..v
-        elseif r <= 45 then return v..v end
-        return v
-    end)
+    -- Rare consonant stumble (~6%)
     text = text:gsub("([bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])", function(c)
-        if math.random(1,100) <= 15 then return c..c end
+        if math.random(1,100) <= 6 then return c..c end
         return c
     end)
-    -- R deletion: only delete if the word has other characters around it
-    -- Process word-by-word to prevent entire words from being deleted
-    text = text:gsub("(%S+)", function(word)
-        local result = word:gsub("[Rr]", function(r)
-            local roll = math.random(1,100)
-            if roll <= 20 then return r..r
-            elseif roll <= 30 then return "" end
-            return r
-        end)
-        -- Never let a word become empty
-        if result == "" or not result:match("%a") then
-            return word
-        end
-        return result
-    end)
-    text = text:gsub("(%s)([aeiouAEIOU])", function(sp, v)
-        if math.random(1,100) <= 20 then return sp.."w"..v end
-        return sp..v
-    end)
-    return text
-end
-
-local function DrunkMessCaps(text, level)
-    if level < 2 then return text end
-    local chance = level==2 and 10 or 25
-    return text:gsub("(%a)", function(c)
-        if math.random(1,100) <= chance then
+    -- Light random-caps (8%)
+    text = text:gsub("(%a)", function(c)
+        if math.random(1,100) <= 8 then
             return c==c:upper() and c:lower() or c:upper()
         end
         return c
     end)
+    return text
+end
+
+-- Smashed: near-total S→Sh, heavy th→d, aggressive vowel stretch,
+-- word-initial vowel gets a leading 'w', random caps chaos, occasional
+-- dropped letter (mirrors WoW's smashed text very closely).
+local function DrunkSlurLevel3(text)
+    -- Almost all S/s → Sh/sh (75%)
+    text = text:gsub("([Ss])", function(s)
+        if math.random(1,100) <= 75 then return s=="S" and "Sh" or "sh" end
+        return s
+    end)
+    -- th/Th → d/D (65%)
+    text = text:gsub("([Tt]h)", function(th)
+        if math.random(1,100) <= 65 then return th:sub(1,1)=="T" and "D" or "d" end
+        return th
+    end)
+    -- Aggressive vowel stretching: triple (20%), double (30%)
+    text = text:gsub("([aeiouAEIOU])", function(v)
+        local r = math.random(1,100)
+        if r <= 20 then return v..v..v
+        elseif r <= 50 then return v..v end
+        return v
+    end)
+    -- Consonant doubling (~12%)
+    text = text:gsub("([bcdfghjklmnpqrtvwxyzBCDFGHJKLMNPQRTVWXYZ])", function(c)
+        if math.random(1,100) <= 12 then return c..c end
+        return c
+    end)
+    -- Word-final consonant occasionally dropped (process word-by-word so
+    -- we never accidentally erase an entire short word)
+    text = text:gsub("(%S+)", function(word)
+        if #word >= 4 then
+            local result = word:gsub("([bcdfghjklmnpqrtvwxyzBCDFGHJKLMNPQRTVWXYZ])$", function(c)
+                if math.random(1,100) <= 18 then return "" end
+                return c
+            end)
+            if result ~= "" and result:match("%a") then return result end
+        end
+        return word
+    end)
+    -- Word-initial vowel gains a slurred 'w' (22%)
+    text = text:gsub("(%s)([aeiouAEIOU])", function(sp, v)
+        if math.random(1,100) <= 22 then return sp.."w"..v end
+        return sp..v
+    end)
+    text = text:gsub("^([aeiouAEIOU])", function(v)
+        if math.random(1,100) <= 22 then return "w"..v end
+        return v
+    end)
+    -- Heavy random-caps chaos (22%)
+    text = text:gsub("(%a)", function(c)
+        if math.random(1,100) <= 22 then
+            return c==c:upper() and c:lower() or c:upper()
+        end
+        return c
+    end)
+    return text
 end
 
 local function DrunkSlur(text, level)
     if not text or text == "" then return text end
     local original = text
-    if level==1 then text = DrunkSlurLevel1(text)
-    elseif level==2 then text = DrunkSlurLevel2(text)
-    elseif level>=3 then text = DrunkSlurLevel3(text) end
-    text = DrunkMessCaps(text, level)
+    if     level == 1 then text = DrunkSlurLevel1(text)
+    elseif level == 2 then text = DrunkSlurLevel2(text)
+    elseif level >= 3 then text = DrunkSlurLevel3(text)
+    end
     -- Safety: never return empty or whitespace-only text
     if not text or text == "" or not text:match("%S") then
         return original
     end
-    -- Cap length to prevent exceeding WoW's 255 char message limit
+    -- Cap length to stay within WoW's 255-char message limit
     if #text > 250 then
         text = text:sub(1, 250)
-        -- Don't cut in the middle of a word; trim to last space
         local lastSpace = text:match(".*()%s")
         if lastSpace and lastSpace > 200 then
             text = text:sub(1, lastSpace - 1)
@@ -190,6 +231,8 @@ local function DrunkSlur(text, level)
     return text
 end
 
+-- Name slurring: leave alone at Tipsy, light S→Sh at Drunk,
+-- add a vowel stretch at Smashed — keeps names recognisable.
 local function SlurName(name, level)
     if level <= 1 then return name end
     local result = name:gsub("([Ss])", function(s)
@@ -236,6 +279,26 @@ RegisterDialect("Drunk", {
     },
     interjectionChance  = {[1]=8,  [2]=18, [3]=30},
     interjectionEndChance = {[1]=0, [2]=30, [3]=45},
+})
+
+-- ============================================================
+-- DIALECT: Pirate
+-- Single-word substitutions only — no multi-word replacements,
+-- no doubled words.  Keeps speech flavourful without going over-the-top.
+-- ============================================================
+RegisterDialect("Pirate", {
+    name        = "Pirate",
+    usesSlider  = true,
+    sliderLabels = {"Off", "Light", "Moderate", "Full"},
+    sliderColors = {
+        {0.5,  0.8,  0.5},
+        {0.85, 0.65, 0.2},
+        {0.75, 0.5,  0.15},
+        {0.65, 0.35, 0.1},
+    },
+    substitutes = nil,  -- rules live in Speaketh_Char.dialectSubstitutes
+    slur        = nil,
+    interjections = nil,
 })
 
 -- ============================================================
@@ -319,6 +382,73 @@ RegisterDialect("Troll", {
 -- which intensity tier each rule originally belonged to.
 -- ============================================================
 local BUILTIN_SUBSTITUTES = {
+    Pirate = {
+        -- Level 1: common swaps a pirate would always use
+        {"my",          "me",           1},
+        {"the",         "tha",          1},
+        {"is",          "be",           1},
+        {"are",         "be",           1},
+        {"yes",         "aye",          1},
+        {"yeah",        "aye",          1},
+        {"hello",       "ahoy",         1},
+        {"hi",          "ahoy",         1},
+        {"hey",         "ahoy",         1},
+        {"you",         "ye",           1},
+        {"your",        "yer",          1},
+        {"friend",      "mate",         1},
+        {"friends",     "mates",        1},
+        {"stop",        "belay",        1},
+        {"before",      "afore",        2},
+        {"after",       "aft",          2},
+        {"old",         "barnacled",    2},
+        {"find",        "spy",          2},
+        {"finding",     "spying",       2},
+        {"look",        "spy",          2},
+        {"looking",     "spying",       2},
+        {"know",        "ken",          2},
+        {"of",          "o'",           2},
+        {"over",        "o'er",         2},
+        {"ever",        "e'er",         2},
+        {"never",       "ne'er",        2},
+        {"money",       "doubloons",    2},
+        {"gold",        "plunder",      2},
+        {"ship",        "vessel",       2},
+        {"man",         "scallywag",    2},
+        {"person",      "landlubber",   2},
+        {"drink",       "grog",         2},
+        {"drinking",    "swiggin'",     2},
+        {"drank",       "swilled",      2},
+        -- Level 3: full-tilt sea-dog
+        {"idiot",       "bilgerat",     3},
+        {"fool",        "swab",         3},
+        {"traitor",     "bilgerat",     3},
+        {"enemy",       "scoundrel",    3},
+        {"enemies",     "scoundrels",   3},
+        {"die",         "perish",       3},
+        {"dead",        "drowned",      3},
+        {"steal",       "plunder",      3},
+        {"stolen",      "plundered",    3},
+        {"lie",         "hornswoggle",  3},
+        {"lied",        "hornswoggled", 3},
+        {"crying",      "blawin'",      3},
+        {"tired",       "weary",        3},
+        {"magic",       "witchcraft",   3},
+        {"fight",       "skirmish",     3},
+        {"fighting",    "skirmishin'",  3},
+        {"run",         "flee",         3},
+        {"running",     "fleeing",      3},
+        {"great",       "grand",        3},
+        {"good",        "fine",         3},
+        {"bad",         "foul",         3},
+        {"stupid",      "addled",       3},
+        {"crazy",       "addled",       3},
+        {"land",        "shore",        3},
+        {"sea",         "brine",        3},
+        {"captain",     "cap'n",        3},
+        {"going",       "sailin'",      3},
+        {"leaving",     "departin'",    3},
+        {"coming",      "arrivin'",     3},
+    },
     Gilnean = {
         {"hi",          "oi",               1},
         {"hey",         "oi",               1},
@@ -594,7 +724,7 @@ local BUILTIN_SUBSTITUTES = {
 -- Seed dialectSubstitutes from built-in tables on first load.
 -- Only runs once per character (guarded by dialectSubstitutesSeedVersion).
 -- After seeding, users own the data - they can remove, edit, or add rules freely.
-local SEED_VERSION = 3  -- bump this to re-seed on future addon versions
+local SEED_VERSION = 4  -- bump this to re-seed on future addon versions
 
 function Speaketh_Dialects:SeedSubstitutes()
     if not Speaketh_Char then return end

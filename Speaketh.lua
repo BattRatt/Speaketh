@@ -615,8 +615,37 @@ end
 -- ============================================================
 local _inTranslation = false
 
+-- ============================================================
+-- Global enable / disable toggle
+-- Persisted in Speaketh_Char.enabled (nil/true = on, false = off).
+-- ============================================================
+function Speaketh:IsEnabled()
+    return not (Speaketh_Char and Speaketh_Char.enabled == false)
+end
+
+function Speaketh:SetEnabled(state)
+    if not Speaketh_Char then return end
+    Speaketh_Char.enabled = state
+    -- Refresh any open UI so the indicator updates immediately
+    if Speaketh_UI then
+        if Speaketh_UI.RefreshWindow    then Speaketh_UI:RefreshWindow()    end
+        if Speaketh_UI.RefreshLanguageHUD then Speaketh_UI:RefreshLanguageHUD() end
+    end
+    local msg = state
+        and "|cffffcc00[Speaketh]|r |cff44ff44Enabled.|r"
+        or  "|cffffcc00[Speaketh]|r |cffff4444Disabled.|r"
+    DEFAULT_CHAT_FRAME:AddMessage(msg)
+end
+
+function Speaketh:Toggle()
+    self:SetEnabled(not self:IsEnabled())
+end
+
 local function Speaketh_ProcessOutgoing(editBox)
     if _inTranslation then return end
+
+    -- Globally disabled — pass through untouched
+    if not Speaketh:IsEnabled() then return end
 
     -- A chat-splitting addon has already handled translation for this send.
     if Speaketh.splitterBypassing then return end
