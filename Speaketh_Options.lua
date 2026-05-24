@@ -999,7 +999,7 @@ local function BuildDialectRulesPanel(panel)
                 editingIndex = ci
                 fromBox:SetText(entry[1]); toBox:SetText(entry[2]); fromBox:SetFocus()
                 actionBtn:SetText("Save"); cancelBtn:Show()
-                SetStatus("Editing rule " .. ci .. " — change the fields and press Save.", false)
+                SetStatus("Editing rule " .. ci .. " - change the fields and press Save.", false)
                 RebuildContent()
             end)
 
@@ -1009,7 +1009,7 @@ local function BuildDialectRulesPanel(panel)
         if #subs == 0 then
             local e = content:CreateFontString(nil, "OVERLAY", "GameFontDisable")
             e:SetPoint("TOPLEFT", content, "TOPLEFT", 4, -y-4)
-            e:SetText("(no rules yet — use the Replace field above to add one)")
+            e:SetText("(no rules yet - use the Replace field above to add one)")
             table.insert(rows, e); content:SetHeight(y+20)
         else content:SetHeight(math.max(y,1)) end
     end
@@ -1067,7 +1067,7 @@ local function BuildNewDialectPanel(panel)
     desc:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
     desc:SetPoint("RIGHT",   body, "RIGHT",   0, 0)
     desc:SetJustifyH("LEFT")
-    desc:SetText("A dialect modifies how you speak — swapping specific words and phrases when active.\nGive it a name, create it, then add word rules from the Dialect Rules page.")
+    desc:SetText("A dialect modifies how you speak - swapping specific words and phrases when active.\nGive it a name, create it, then add word rules from the Dialect Rules page.")
     desc:SetHeight(30)
 
     local nameLbl = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1206,7 +1206,7 @@ local function BuildNewLanguagePanel(panel)
     wordBox:SetAutoFocus(false)
     wordBox:SetMaxLetters(2048)
 
-    -- Add Language button + Import from Code button — same row, side by side
+    -- Add Language button + Import from Code button - same row, side by side
     local createBtn = GoldBtn(body, "")
     createBtn:SetSize(110, 22)
     createBtn:SetPoint("TOPLEFT", wordBox, "BOTTOMLEFT", 0, -8)
@@ -1284,7 +1284,7 @@ local function BuildNewLanguagePanel(panel)
                     nameBox:SetTextColor(0.5, 0.5, 0.5)
                     wordBox:SetText(table.concat(cw, ", "))
                     createBtn:SetText("Save Changes")
-                    SetStatus('Editing "'..cn..'" — modify words above and click Save Changes.', false)
+                    SetStatus('Editing "'..cn..'" - modify words above and click Save Changes.', false)
                     wordBox:SetFocus()
                 end)
 
@@ -1395,7 +1395,7 @@ local function BuildPassthroughPanel(panel)
     desc:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
     desc:SetPoint("RIGHT",   body, "RIGHT",   0, 0)
     desc:SetJustifyH("LEFT")
-    desc:SetText("Words in this list are never translated — they pass through every language unchanged.\nUseful for character names, in-game terms, or anything you always want readable.")
+    desc:SetText("Words in this list are never translated - they pass through every language unchanged.\nUseful for character names, in-game terms, or anything you always want readable.")
     desc:SetHeight(30)
 
     local wordLbl = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1511,14 +1511,14 @@ local function BuildAboutPanel(panel)
 
     local featureList = {
         "20+ lore-accurate racial & exotic languages",
-        "Custom languages — define your own word pools",
-        "Language import/export — share codes between players",
-        "Dialect word rules — built-in and fully editable",
-        "Custom dialects — create your own accents",
-        "Drunk dialect — four-level slurring engine",
-        "Fluency system — 0–100% per language, passively learned",
-        "Cross-player decoding — party, raid, guild, whisper & /say",
-        "Passthrough words — names that always stay readable",
+        "Custom languages - define your own word pools",
+        "Language import/export - share codes between players",
+        "Dialect word rules - built-in and fully editable",
+        "Custom dialects - create your own accents",
+        "Drunk dialect - four-level slurring engine",
+        "Fluency system - 0-100% per language, passively learned",
+        "Cross-player decoding - party, raid, guild, whisper & /say",
+        "Passthrough words - names that always stay readable",
         "Minimap button & floating language HUD",
     }
     local prev = featHead
@@ -1555,7 +1555,7 @@ local function BuildAboutPanel(panel)
         ct:SetText(cmd[1])
         local cd = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cd:SetPoint("LEFT", ct, "LEFT", 190, 0)
-        cd:SetText("— " .. cmd[2])
+        cd:SetText("- " .. cmd[2])
         cd:SetTextColor(0.70, 0.70, 0.75, 1)
     end
 
@@ -1799,7 +1799,7 @@ function Speaketh_Options:Open()
         local y = -48
         AddCategory("general", "General", BuildGeneralPanel, y)
 
-        -- "Word Rules" toggle button — custom styled
+        -- "Word Rules" toggle button - custom styled
         y = y - (ROW_H + ROW_GAP)
         local wrY = y
 
@@ -1853,7 +1853,7 @@ function Speaketh_Options:Open()
         -- Hide all sub-buttons initially
         for _, btn in ipairs(subBtns) do btn:Hide() end
 
-        -- About button — repositioned when Word Rules expands/collapses
+        -- About button - repositioned when Word Rules expands/collapses
         local aboutCollapsedY = wrY - (ROW_H + ROW_GAP)
         local aboutExpandedY  = wrY - (ROW_H + SUB_GAP) - SUB_BLOCK - ROW_GAP
         local aboutBtn, aboutPanel  -- forward refs; AddCategory stores them
@@ -1891,7 +1891,7 @@ function Speaketh_Options:Open()
             SetWordRulesExpanded(not wrExpanded)
         end)
 
-        -- About — start collapsed position
+        -- About - start collapsed position
         y = aboutCollapsedY
         AddCategory("about", "About", BuildAboutPanel, y)
         -- Grab the button AddCategory just created

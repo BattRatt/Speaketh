@@ -593,7 +593,7 @@ local BUILTIN_SUBSTITUTES = {
 
 -- Seed dialectSubstitutes from built-in tables on first load.
 -- Only runs once per character (guarded by dialectSubstitutesSeedVersion).
--- After seeding, users own the data — they can remove, edit, or add rules freely.
+-- After seeding, users own the data - they can remove, edit, or add rules freely.
 local SEED_VERSION = 3  -- bump this to re-seed on future addon versions
 
 function Speaketh_Dialects:SeedSubstitutes()

@@ -15,7 +15,7 @@ function Speaketh_Fluency:Set(langKey, value)
 end
 
 -- Grants fluency for a language the player just heard
--- gainRate: base points to add (modified by current fluency — harder to improve when fluent)
+-- gainRate: base points to add (modified by current fluency - harder to improve when fluent)
 function Speaketh_Fluency:Learn(langKey, gainRate)
     local current = self:Get(langKey)
     if current >= 100 then return end
@@ -39,7 +39,7 @@ function Speaketh_Fluency:Learn(langKey, gainRate)
     end
 end
 
--- Called when the player sends a message in a language — ensure they have 100% in their own tongue
+-- Called when the player sends a message in a language - ensure they have 100% in their own tongue
 function Speaketh_Fluency:EnsureNative(langKey)
     if self:Get(langKey) < 100 then
         self:Set(langKey, 100)

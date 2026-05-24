@@ -246,7 +246,7 @@ Speaketh_Languages["Pandaren"] = {
 }
 
 -- ============================================================
--- DEMONIC  (Eredun / Draconic / Titan — shared table)
+-- DEMONIC  (Eredun / Draconic / Titan - shared table)
 -- ============================================================
 Speaketh_Languages["Demonic"] = {
     blizzard = "Demonic", race = {"Demon Hunter"}, faction = nil,
@@ -355,7 +355,7 @@ Speaketh_Languages["Vrykul"] = {
 }
 
 -- ============================================================
--- GILNEAN  (Worgen — Cockney rhyming slang, sourced from Tongues addon)
+-- GILNEAN  (Worgen - Cockney rhyming slang, sourced from Tongues addon)
 -- Uses a substitute + ignore system instead of pure hashing.
 -- ============================================================
 Speaketh_Languages["Gilnean"] = {
@@ -406,7 +406,7 @@ Speaketh_Languages["Gilnean"] = {
 }
 
 -- ============================================================
--- SHATH'YAR  (Old God — authentic SStrHash word tables from ShathYar addon)
+-- SHATH'YAR  (Old God - authentic SStrHash word tables from ShathYar addon)
 -- ============================================================
 Speaketh_Languages["Shath'Yar"] = {
     blizzard = nil, race = nil, faction = nil,
@@ -428,7 +428,7 @@ Speaketh_Languages["Shath'Yar"] = {
     }
 }
 
--- Shath'Yar hash constants (from ShathYar.lua — SStrHash algorithm)
+-- Shath'Yar hash constants (from ShathYar.lua - SStrHash algorithm)
 Speaketh_SStrHash_constants = {
     0x486e26ee, 0xdcaa16b3, 0xe1918eef, 0x202dafdb, 0x341c7dc7, 0x1c365303,
     0x40ef2d37, 0x65fd5e49, 0xd6057177, 0x904ece93, 0x1c38024f, 0x98fd323b,

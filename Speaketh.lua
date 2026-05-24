@@ -74,6 +74,67 @@ local CHAN_KEY_MAP = {
 Speaketh.splitterBypassing = false
 
 -- ============================================================
+-- OOC (out-of-character) bracket protection
+-- ============================================================
+-- Text inside parentheses ( ... ) is OOC by convention in WoW RP and must
+-- never be touched by dialect slurring, accent substitutions, or language
+-- translation.  We handle this with a strip/restore pair:
+--
+--   StripOOC(text)    -> stripped text, token table
+--   RestoreOOC(text, tokens) -> original OOC spans put back in place
+--
+-- Each OOC span is replaced with a unique ASCII sentinel of the form
+--   \1N\1   (SOH + decimal index + SOH)
+-- which cannot appear in normal user text and is invisible to all the
+-- regex patterns used by the translation and dialect engines.
+--
+-- Nested parens are NOT supported intentionally: RP convention treats ( )
+-- as the OOC delimiter and nesting is vanishingly rare.  If an opening
+-- paren has no matching close paren the remainder of the message is treated
+-- as a single OOC span (generous/safe default).
+
+local function StripOOC(text)
+    local tokens = {}
+    local result = {}
+    local pos = 1
+    local n = 0
+    while pos <= #text do
+        local oStart = text:find("%(", pos)
+        if not oStart then
+            table.insert(result, text:sub(pos))
+            break
+        end
+        -- Append everything before the opening paren as-is
+        if oStart > pos then
+            table.insert(result, text:sub(pos, oStart - 1))
+        end
+        -- Find the matching closing paren
+        local oEnd = text:find("%)", oStart + 1)
+        local span
+        if oEnd then
+            span = text:sub(oStart, oEnd)   -- includes both parens
+            pos = oEnd + 1
+        else
+            -- Unclosed paren: protect to end of string
+            span = text:sub(oStart)
+            pos = #text + 1
+        end
+        n = n + 1
+        tokens[n] = span
+        table.insert(result, "\1" .. n .. "\1")
+    end
+    return table.concat(result), tokens
+end
+
+local function RestoreOOC(text, tokens)
+    if not tokens or not next(tokens) then return text end
+    -- Replace each sentinel with the original OOC span
+    return (text:gsub("\1(%d+)\1", function(idx)
+        return tokens[tonumber(idx)] or ""
+    end))
+end
+
+-- ============================================================
 -- Language management
 -- ============================================================
 function Speaketh:GetLanguage()
@@ -94,7 +155,7 @@ function Speaketh:SetLanguage(key)
     if key == "None" then
         Speaketh_Char.language = "None"
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cffffcc00[Speaketh]|r Now speaking |cff88ccffNone|r  (no translation — dialects only)")
+            "|cffffcc00[Speaketh]|r Now speaking |cff88ccffNone|r  (no translation - dialects only)")
         if Speaketh_UI and Speaketh_UI.Button then
             Speaketh_UI:UpdateTooltip()
         end
@@ -213,6 +274,10 @@ end
 -- apostrophes in contractions (don't, I'm, Thrall's, etc.).
 -- If langKey is not "None", also translates the quoted content into the language.
 local function ApplyDialectToQuotes(text, langKey)
+    -- Protect OOC spans before processing quoted speech
+    local oocTokens
+    text, oocTokens = StripOOC(text)
+
     local result = {}
     local pos = 1
     while pos <= #text do
@@ -265,13 +330,17 @@ local function ApplyDialectToQuotes(text, langKey)
 
         pos = qEnd + 1
     end
-    return table.concat(result)
+    return RestoreOOC(table.concat(result), oocTokens)
 end
 
 -- Translates msg in langKey, prepending a [Language] tag when needed.
--- Returns CLEAN translated string — no payload.
+-- Returns CLEAN translated string - no payload.
 -- If langKey is "None", only dialect transformations are applied.
 local function BuildTranslatedMsg(msg, langKey)
+    -- Protect OOC spans (parentheses) from dialect and translation
+    local oocTokens
+    msg, oocTokens = StripOOC(msg)
+
     local originalMsg = msg
     -- Apply dialect substitutions + slurring before translation
     if Speaketh_Dialects and Speaketh_Dialects.Apply then
@@ -293,7 +362,7 @@ local function BuildTranslatedMsg(msg, langKey)
         if not result or result == "" or not result:match("%S") then
             result = originalMsg
         end
-        return result, nil
+        return RestoreOOC(result, oocTokens), nil
     end
 
     local langData  = Speaketh_Languages[langKey]
@@ -333,11 +402,11 @@ local function BuildTranslatedMsg(msg, langKey)
     -- WoW silently drops chat messages longer than 255 bytes. Some languages
     -- (Gilnean in particular) expand input words into longer phrases, so even
     -- a 255-byte input can translate to 400+ bytes. Without a splitter addon,
-    -- we can't send multiple chunks — but we can fit as many words as possible
+    -- we can't send multiple chunks - but we can fit as many words as possible
     -- rather than bailing to untranslated text.
     --
     -- Strategy: if the translated result is too long, binary-search on the
-    -- input word count — retranslate progressively fewer words until the
+    -- input word count - retranslate progressively fewer words until the
     -- result fits. This guarantees the sent message is always in the target
     -- language and as complete as the byte budget allows.
     --
@@ -394,15 +463,15 @@ local function BuildTranslatedMsg(msg, langKey)
         if bestMsg ~= "" then
             finalMsg = bestMsg
         else
-            -- Absolute fallback: single word still too long — hard truncate.
+            -- Absolute fallback: single word still too long - hard truncate.
             finalMsg = (tagPrefix .. Speaketh_Translate:Message(words[1] or msg, langKey)):sub(1, 250)
         end
     end
 
     if isNativeBlizz then
-        return finalMsg, nil
+        return RestoreOOC(finalMsg, oocTokens), nil
     else
-        return finalMsg, langKey
+        return RestoreOOC(finalMsg, oocTokens), langKey
     end
 end
 
@@ -538,7 +607,7 @@ end
 -- addons and was confirmed working in Speaketh 1.2.5 and earlier.
 --
 -- The reason this sometimes fails in rated content is NOT the editbox
--- hook itself — it's that Speaketh_SendOriginal fires addon-channel
+-- hook itself - it's that Speaketh_SendOriginal fires addon-channel
 -- broadcasts, and some of those channels become restricted during
 -- rated timers. If that errors mid-hook, the editbox text never gets
 -- modified properly. Everything from that point is wrapped so that a
@@ -560,7 +629,7 @@ local function Speaketh_ProcessOutgoing(editBox)
     local text = editBox:GetText()
     if not text or text == "" then return end
 
-    -- Leave slash commands alone — they're WoW instructions, not chat.
+    -- Leave slash commands alone - they're WoW instructions, not chat.
     -- Check after stripping any leading whitespace so e.g. " /target" still
     -- passes through untouched.
     local firstNonSpace = text:match("^%s*(.)")
@@ -660,7 +729,7 @@ local function Speaketh_InstallSendHook()
 end
 
 -- ============================================================
--- Splitter addon API by VfX / Bitwise1057
+-- Splitter addon API
 --
 -- Exposes the translation pipeline so that a chat-splitting addon (e.g.
 -- EmoteScribe) can correctly translate each chunk independently, rather
@@ -791,9 +860,9 @@ end
 -- Applies dialect, language encoding, speaker fluency blend, and the
 -- [Language] tag prefix. For EMOTE, only quoted spans are translated.
 -- Returns: translatedMsg, langKey
---   translatedMsg — the final string to send (never nil/empty; falls back
+--   translatedMsg - the final string to send (never nil/empty; falls back
 --                   to the original if translation would produce garbage)
---   langKey       — the active language key, or nil if language is "None"
+--   langKey       - the active language key, or nil if language is "None"
 --                   or a native Blizzard language (no [Tag] prefix needed)
 -- The caller is responsible for calling BroadcastOriginal separately.
 -- Note: for per-chunk translation, prefer TranslateChunk which handles
@@ -947,7 +1016,7 @@ end
 
 -- Incoming chat filter for fluency-based understanding.
 -- This is called by Blizzard's chat frame pipeline for each filter event
--- registered below. Kept simple — no pcall wrapping — because the original
+-- registered below. Kept simple - no pcall wrapping - because the original
 -- (pre-1.2.6) version of this code worked correctly and the pcall wrapper
 -- caused message-suppression bugs.
 local function Speaketh_ChatFilter(self, event, msg, sender, ...)
@@ -1294,7 +1363,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- ============================================================
--- Splash screen — native-style, matches the Speak Window chrome
+-- Splash screen - native-style, matches the Speak Window chrome
 -- (dark slate backdrop, thin gold edge, gold-accent header).
 -- ============================================================
 function Speaketh_UI:ShowSplash()
@@ -1341,7 +1410,7 @@ function Speaketh_UI:ShowSplash()
         local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         ver:SetPoint("LEFT", title, "RIGHT", 8, -1)
         ver:SetTextColor(0.55, 0.55, 0.60, 1)
-        ver:SetText("v" .. versionLocal .. "  —  Roleplay Language Addon")
+        ver:SetText("v" .. versionLocal .. "  -  Roleplay Language Addon")
 
         local div1 = f:CreateTexture(nil, "ARTWORK")
         div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)
@@ -1361,13 +1430,13 @@ function Speaketh_UI:ShowSplash()
 
         local features = {
             "20+ lore-accurate racial & exotic languages",
-            "Custom languages — define your own word pools",
-            "Language sharing — export/import codes for custom languages",
-            "Dialect system — Gilnean, Troll, Drunk, and more",
-            "Custom dialects — build your own word-swap accents",
-            "Fluency system — 0-100% per language, passive learning",
-            "Cross-player decoding — party, raid, guild, whisper & /say",
-            "Passthrough words — names that never get translated",
+            "Custom languages - define your own word pools",
+            "Language sharing - export/import codes for custom languages",
+            "Dialect system - Gilnean, Troll, Drunk, and more",
+            "Custom dialects - build your own word-swap accents",
+            "Fluency system - 0-100% per language, passive learning",
+            "Cross-player decoding - party, raid, guild, whisper & /say",
+            "Passthrough words - names that never get translated",
             "Minimap button & floating language HUD",
         }
 
@@ -1481,7 +1550,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
             local cur = (Speaketh:GetLanguage() == key) and " |cff00ff00<speaking>|r" or ""
             if f > 0 then
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
-                    "  |cff88ccff%s|r — %d%%%s", Speaketh:GetLanguageDisplayName(key), math.floor(f), cur))
+                    "  |cff88ccff%s|r - %d%%%s", Speaketh:GetLanguageDisplayName(key), math.floor(f), cur))
             end
         end
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh] Unknown languages:|r")
@@ -1489,7 +1558,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
             local f = Speaketh_Fluency:Get(key)
             if f == 0 then
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
-                    "  |cff666666%s|r — unknown", Speaketh:GetLanguageDisplayName(key)))
+                    "  |cff666666%s|r - unknown", Speaketh:GetLanguageDisplayName(key)))
             end
         end
 
@@ -1533,11 +1602,11 @@ SlashCmdList["SPEAKETH"] = function(msg)
         end
 
     elseif cmd == "share" then
-        -- /sp share <language>  — prints an import code to chat for copy-paste sharing
+        -- /sp share <language>  - prints an import code to chat for copy-paste sharing
         local input = strtrim(rest):lower()
         if input == "" then
             DEFAULT_CHAT_FRAME:AddMessage(
-                "|cffffcc00[Speaketh]|r Usage: /sp share <language>  — generates an import code")
+                "|cffffcc00[Speaketh]|r Usage: /sp share <language>  - generates an import code")
             return
         end
         local matchedKey = nil
@@ -1558,7 +1627,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
         if Speaketh_Share and Speaketh_Share.ExportCode then
             local code, err = Speaketh_Share:ExportCode(matchedKey)
             if code then
-                DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh]|r Import code — copy everything below:")
+                DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh]|r Import code - copy everything below:")
                 DEFAULT_CHAT_FRAME:AddMessage("|cff88ccff" .. code .. "|r")
             else
                 DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh]|r " .. (err or "Export failed."))
@@ -1566,7 +1635,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
         end
 
     elseif cmd == "import" then
-        -- /sp import <code>  — import a language from a code string
+        -- /sp import <code>  - import a language from a code string
         local code = strtrim(rest)
         if code == "" then
             DEFAULT_CHAT_FRAME:AddMessage(

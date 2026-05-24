@@ -32,7 +32,7 @@ function Speaketh_UI:CreateMinimapButton()
     bg:SetAllPoints()
     bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
 
-    -- Standard tracking border ring — offset (10,-10) is the standard
+    -- Standard tracking border ring - offset (10,-10) is the standard
     -- correction for MiniMap-TrackingBorder's built-in visual offset
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetSize(54, 54)
@@ -495,7 +495,7 @@ function Speaketh_UI:UpdateDialectDisplay()
         self.DialectStatusLabel:SetText("None")
         self.DialectStatusLabel:SetTextColor(0.5, 0.5, 0.5, 1)
     else
-        -- Show "Drunk  ·  Sober" style — no redundant colon prefix
+        -- Show "Drunk  ·  Sober" style - no redundant colon prefix
         local label
         if data and data.sliderLabels then
             local level  = Speaketh_Dialects:GetLevel(active)
@@ -618,7 +618,7 @@ function Speaketh_UI:ShowLanguageMenu(anchor)
         end
 
         info = UIDropDownMenu_CreateInfo()
-        info.text = "— Not yet learned —"
+        info.text = "- Not yet learned -"
         info.isTitle = true
         info.notCheckable = true
         UIDropDownMenu_AddButton(info, level)
@@ -715,7 +715,7 @@ function Speaketh_UI:CreateLanguageHUD()
         hud:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
     end
 
-    -- Dark slate backdrop with thin gold edge — matches Speak Window
+    -- Dark slate backdrop with thin gold edge - matches Speak Window
     if hud.SetBackdrop then
         hud:SetBackdrop({
             bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",

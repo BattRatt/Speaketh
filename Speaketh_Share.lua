@@ -5,7 +5,7 @@
 -- Payload: "LanguageName:word1,word2,word3,..."
 --
 -- Base64 uses A-Z a-z 0-9 - _ (URL-safe, WoW chat safe).
--- Implemented with integer division and modulo only — no bitwise
+-- Implemented with integer division and modulo only - no bitwise
 -- operators, fully compatible with WoW's Lua 5.1.
 --
 -- Typical sizes:
@@ -140,17 +140,17 @@ function Speaketh_Share:ImportCode(code, overwrite)
         if code:sub(1, #CODE_PREFIX) ~= CODE_PREFIX then
             return nil, "Not a Speaketh import code (should start with SPKTH:)."
         end
-        return nil, "Malformed code — it may be truncated. Copy the full code and try again."
+        return nil, "Malformed code - it may be truncated. Copy the full code and try again."
     end
 
     local raw = b64dec(encoded)
     if checksum(raw) ~= cs:upper() then
-        return nil, "Code is corrupted — checksum mismatch. Re-copy and try again."
+        return nil, "Code is corrupted - checksum mismatch. Re-copy and try again."
     end
 
     local name, wordstr = raw:match("^([^:]+):(.+)$")
     if not name or not wordstr then
-        return nil, "Malformed payload — unrecognized code structure."
+        return nil, "Malformed payload - unrecognized code structure."
     end
     if #name > 64 then return nil, "Language name is too long." end
 

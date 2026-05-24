@@ -162,7 +162,7 @@ end
 -- 2) Words on the ignore list pass through unchanged
 -- 3) Remaining words get hashed into phrase buckets (which may be multi-word)
 --
--- Substituted spans are tracked and excluded from step 2 hashing — otherwise
+-- Substituted spans are tracked and excluded from step 2 hashing - otherwise
 -- a substitute like "hello" -> "'ello" would immediately have its "ello"
 -- re-hashed in step 2 and turn into gibberish.
 function Speaketh_Translate:GilneanSegment(text, langKey)
