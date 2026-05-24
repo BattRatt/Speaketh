@@ -4,10 +4,6 @@
 
 ---
 
-This addon is inspired by Tongues, which has been broken for some time. Initially meant to replicate it, Speaketh grew into something more: a full lore-accurate language system built from Blizzard's own in-game language tables.
-
----
-
 ## Features
 
 ### Languages and Translation
