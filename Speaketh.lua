@@ -74,6 +74,67 @@ local CHAN_KEY_MAP = {
 Speaketh.splitterBypassing = false
 
 -- ============================================================
+-- OOC (out-of-character) bracket protection
+-- ============================================================
+-- Text inside parentheses ( ... ) is OOC by convention in WoW RP and must
+-- never be touched by dialect slurring, accent substitutions, or language
+-- translation.  We handle this with a strip/restore pair:
+--
+--   StripOOC(text)    -> stripped text, token table
+--   RestoreOOC(text, tokens) -> original OOC spans put back in place
+--
+-- Each OOC span is replaced with a unique ASCII sentinel of the form
+--   \1N\1   (SOH + decimal index + SOH)
+-- which cannot appear in normal user text and is invisible to all the
+-- regex patterns used by the translation and dialect engines.
+--
+-- Nested parens are NOT supported intentionally: RP convention treats ( )
+-- as the OOC delimiter and nesting is vanishingly rare.  If an opening
+-- paren has no matching close paren the remainder of the message is treated
+-- as a single OOC span (generous/safe default).
+
+local function StripOOC(text)
+    local tokens = {}
+    local result = {}
+    local pos = 1
+    local n = 0
+    while pos <= #text do
+        local oStart = text:find("%(", pos)
+        if not oStart then
+            table.insert(result, text:sub(pos))
+            break
+        end
+        -- Append everything before the opening paren as-is
+        if oStart > pos then
+            table.insert(result, text:sub(pos, oStart - 1))
+        end
+        -- Find the matching closing paren
+        local oEnd = text:find("%)", oStart + 1)
+        local span
+        if oEnd then
+            span = text:sub(oStart, oEnd)   -- includes both parens
+            pos = oEnd + 1
+        else
+            -- Unclosed paren: protect to end of string
+            span = text:sub(oStart)
+            pos = #text + 1
+        end
+        n = n + 1
+        tokens[n] = span
+        table.insert(result, "\1" .. n .. "\1")
+    end
+    return table.concat(result), tokens
+end
+
+local function RestoreOOC(text, tokens)
+    if not tokens or not next(tokens) then return text end
+    -- Replace each sentinel with the original OOC span
+    return (text:gsub("\1(%d+)\1", function(idx)
+        return tokens[tonumber(idx)] or ""
+    end))
+end
+
+-- ============================================================
 -- Language management
 -- ============================================================
 function Speaketh:GetLanguage()
@@ -213,6 +274,10 @@ end
 -- apostrophes in contractions (don't, I'm, Thrall's, etc.).
 -- If langKey is not "None", also translates the quoted content into the language.
 local function ApplyDialectToQuotes(text, langKey)
+    -- Protect OOC spans before processing quoted speech
+    local oocTokens
+    text, oocTokens = StripOOC(text)
+
     local result = {}
     local pos = 1
     while pos <= #text do
@@ -265,13 +330,17 @@ local function ApplyDialectToQuotes(text, langKey)
 
         pos = qEnd + 1
     end
-    return table.concat(result)
+    return RestoreOOC(table.concat(result), oocTokens)
 end
 
 -- Translates msg in langKey, prepending a [Language] tag when needed.
 -- Returns CLEAN translated string — no payload.
 -- If langKey is "None", only dialect transformations are applied.
 local function BuildTranslatedMsg(msg, langKey)
+    -- Protect OOC spans (parentheses) from dialect and translation
+    local oocTokens
+    msg, oocTokens = StripOOC(msg)
+
     local originalMsg = msg
     -- Apply dialect substitutions + slurring before translation
     if Speaketh_Dialects and Speaketh_Dialects.Apply then
@@ -293,7 +362,7 @@ local function BuildTranslatedMsg(msg, langKey)
         if not result or result == "" or not result:match("%S") then
             result = originalMsg
         end
-        return result, nil
+        return RestoreOOC(result, oocTokens), nil
     end
 
     local langData  = Speaketh_Languages[langKey]
@@ -400,9 +469,9 @@ local function BuildTranslatedMsg(msg, langKey)
     end
 
     if isNativeBlizz then
-        return finalMsg, nil
+        return RestoreOOC(finalMsg, oocTokens), nil
     else
-        return finalMsg, langKey
+        return RestoreOOC(finalMsg, oocTokens), langKey
     end
 end
 
