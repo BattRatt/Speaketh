@@ -570,6 +570,44 @@ function Speaketh_UI:ToggleSpeakWindow()
 end
 
 -- ============================================================
+-- Dropdown anchor helper
+--
+-- UIDropDownMenu submenus always fly out to the right. When the HUD is
+-- near a screen edge the submenu would clip or wrap back over the parent.
+-- This helper applies an inward offset when near the right edge, an
+-- outward offset when near the left edge, and no offset in the center
+-- third where there is room on both sides.
+--
+-- DROPDOWN_EDGE_OFFSET  px shift applied when near an edge. Tune if the
+--                       menu sits too far from or overlaps the button.
+-- DROPDOWN_EDGE_ZONE    fraction of screen width that counts as "near
+--                       an edge" (0.25 = outer 25% on each side).
+-- ============================================================
+local DROPDOWN_EDGE_OFFSET = 100
+local DROPDOWN_EDGE_ZONE   = 0.15
+
+local function ToggleDropDownSmart(frame, anchor, hasSubmenus)
+    local xOff = 0
+
+    if anchor and anchor.GetCenter then
+        local anchorX = anchor:GetCenter() or 0
+        local screenW = GetScreenWidth()
+        local zone    = screenW * DROPDOWN_EDGE_ZONE
+
+        if anchorX > (screenW - zone) then
+            -- Near the right edge: shift menu leftward so submenus open inward
+            xOff = -DROPDOWN_EDGE_OFFSET
+        elseif anchorX < zone then
+            -- Near the left edge: shift menu rightward so submenus open inward
+            xOff = DROPDOWN_EDGE_OFFSET
+        end
+        -- Center zone: no offset, default rightward open
+    end
+
+    ToggleDropDownMenu(1, nil, frame, anchor or "cursor", xOff, 0)
+end
+
+-- ============================================================
 -- Language selection dropdown
 -- ============================================================
 local menuFrame = CreateFrame("Frame", "SpeakethMenuFrame", UIParent, "UIDropDownMenuTemplate")
@@ -671,7 +709,7 @@ function Speaketh_UI:ShowLanguageMenu(anchor)
     end
 
     UIDropDownMenu_Initialize(menuFrame, init, "MENU")
-    ToggleDropDownMenu(1, nil, menuFrame, anchor or "cursor", 0, 0)
+    ToggleDropDownSmart(menuFrame, anchor, true)
 end
 
 -- ============================================================
@@ -718,7 +756,7 @@ function Speaketh_UI:ShowDialectMenu(anchor)
     end
 
     UIDropDownMenu_Initialize(dialectMenuFrame, init, "MENU")
-    ToggleDropDownMenu(1, nil, dialectMenuFrame, anchor or "cursor", 0, 0)
+    ToggleDropDownSmart(dialectMenuFrame, anchor, false)
 end
 
 -- ============================================================
