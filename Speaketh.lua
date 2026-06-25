@@ -27,6 +27,7 @@ local DEFAULTS = {
     customLanguages = {},    -- user-created languages: [key] = {name=string, words={...}}
     showSplash           = false,   -- show splash on every login (first login only when false)
     showLockdownNotify   = false,   -- print a chat message when combat lockdown disables translation
+    theme                = "Classic",  -- UI theme: "Classic" (gold) or "Void" (purple)
     enableOOB      = true,    -- join hidden cross-player channel so non-grouped Speaketh users can decode each other's SAY/YELL
     -- Per-channel translation toggles (all on by default)
     chanSay          = true,
@@ -309,7 +310,9 @@ local function ApplyDialectToQuotes(text, langKey)
         -- Apply dialect to the quoted content
         if quoted ~= "" then
             local processed = quoted
-            if Speaketh_Dialects and Speaketh_Dialects.Apply then
+            -- Skip dialect word swaps/slur when a language is active (the
+            -- translation pass would garble them); see BuildTranslatedMsg.
+            if langKey == "None" and Speaketh_Dialects and Speaketh_Dialects.Apply then
                 processed = Speaketh_Dialects:Apply(quoted, langKey)
             end
             -- Apply language translation if not "None"
@@ -342,8 +345,14 @@ local function BuildTranslatedMsg(msg, langKey)
     msg, oocTokens = StripOOC(msg)
 
     local originalMsg = msg
-    -- Apply dialect substitutions + slurring before translation
-    if Speaketh_Dialects and Speaketh_Dialects.Apply then
+    -- Apply dialect substitutions + slurring before translation.
+    -- Only when no language is active: a real language translates/hashes every
+    -- word into its own output, so dialect word swaps (e.g. "hello"->"'ello")
+    -- are either made invisible (foreign hashing) or partly re-garbled (Gilnean
+    -- codespeak re-hashing the leftover). Skipping the swap/slur pass under a
+    -- language avoids that mangling. Post-translation interjections (hiccups,
+    -- stammers) are added later and survive, so they still apply in both cases.
+    if langKey == "None" and Speaketh_Dialects and Speaketh_Dialects.Apply then
         msg = Speaketh_Dialects:Apply(msg, langKey)
     end
     -- Safety: if dialect processing wiped the message, fall back to original
@@ -649,6 +658,16 @@ local function Speaketh_ProcessOutgoing(editBox)
 
     -- A chat-splitting addon has already handled translation for this send.
     if Speaketh.splitterBypassing then return end
+
+    -- An Enscriber-based splitter (e.g. EmoteScribe) owns the outgoing send and
+    -- translates each chunk via TranslateChunk. Its editbox callback and ours
+    -- both fire on ChatFrame.OnEditBoxPreSendText with no guaranteed dispatch
+    -- order, so the per-send splitterBypassing flag above may not be set yet
+    -- when we run. Stand down whenever such a splitter is loaded so we never do
+    -- a premature translate + broadcast that the splitter would then double.
+    if LibEnscriber and LibEnscriber.Internal and LibEnscriber.Internal.load then
+        return
+    end
 
     -- If auto-chat is off, don't process normal chat editboxes
     if Speaketh_Char and Speaketh_Char.autoChat == false then return end
@@ -1280,6 +1299,12 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_LOGIN" then
+        -- Initialize the theme system from saved variables before any UI
+        -- is constructed, so newly built frames skin correctly on creation.
+        if Speaketh_Theme and Speaketh_Theme.Init then
+            Speaketh_Theme:Init()
+        end
+
         -- Register addon prefix for group/guild/whisper fluency decoding.
         -- Guard so a very old client lacking C_ChatInfo doesn't error.
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
@@ -1296,6 +1321,13 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         if Speaketh_Dialects and Speaketh_Dialects.SeedSubstitutes then
             Speaketh_Dialects:SeedSubstitutes()
         end
+
+        -- Build confirmation: lets you verify in chat that the smart-dialect
+        -- code actually loaded. If you do NOT see this line after a full
+        -- restart, the old files are still in your AddOns folder.
+        DEFAULT_CHAT_FRAME:AddMessage(
+            "|cffffcc00[Speaketh]|r Smart dialects active (build SD-7). "
+            .. "If speech still flows oddly, type |cff88ccff/sp resetdialects|r.")
 
         -- Re-register any user-created custom dialects from saved variables
         if Speaketh_Dialects and Speaketh_Dialects.SeedCustomDialects then
@@ -1425,9 +1457,19 @@ function Speaketh_UI:ShowSplash()
                 tile = true, tileSize = 32, edgeSize = 12,
                 insets = { left = 4, right = 4, top = 4, bottom = 4 },
             })
-            f:SetBackdropColor(0.08, 0.08, 0.10, 0.97)
-            f:SetBackdropBorderColor(0.55, 0.45, 0.20, 1)
+            Speaketh_Theme:Register(function(C)
+                if not f.SetBackdropColor then return end
+                local bg, bd = C.slateBg, C.slateBorder
+                f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
+                f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
+            end)
         end
+
+        -- Void-only atmospheric decoration (hidden in Classic)
+        Speaketh_Theme:AddVoidVignette(f)
+        Speaketh_Theme:AddVoidInkBleed(f)
+        Speaketh_Theme:AddVoidGlowPulse(f)
+        Speaketh_Theme:AddVoidRunes(f, 12, 24)
 
         -- Title
         local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1445,7 +1487,9 @@ function Speaketh_UI:ShowSplash()
         div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)
         div1:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -36)
         div1:SetHeight(1)
-        div1:SetColorTexture(0.55, 0.45, 0.20, 0.9)
+        Speaketh_Theme:Register(function(C)
+            local a = C.accent; div1:SetColorTexture(a[1], a[2], a[3], 0.9)
+        end)
 
         local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
         closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
@@ -1454,8 +1498,10 @@ function Speaketh_UI:ShowSplash()
         -- Features
         local featHead = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         featHead:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -48)
-        featHead:SetTextColor(1.0, 0.82, 0.0, 1)
         featHead:SetText("Features")
+        Speaketh_Theme:Register(function(C)
+            local t = C.headerGold; featHead:SetTextColor(t[1], t[2], t[3], 1)
+        end)
 
         local features = {
             "20+ lore-accurate racial & exotic languages",
@@ -1479,13 +1525,17 @@ function Speaketh_UI:ShowSplash()
         div2:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -210)
         div2:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -210)
         div2:SetHeight(1)
-        div2:SetColorTexture(0.55, 0.45, 0.20, 0.5)
+        Speaketh_Theme:Register(function(C)
+            local a = C.accent; div2:SetColorTexture(a[1], a[2], a[3], 0.5)
+        end)
 
         -- Commands
         local cmdHead = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         cmdHead:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -222)
-        cmdHead:SetTextColor(1.0, 0.82, 0.0, 1)
         cmdHead:SetText("Commands")
+        Speaketh_Theme:Register(function(C)
+            local t = C.headerGold; cmdHead:SetTextColor(t[1], t[2], t[3], 1)
+        end)
 
         local commands = {
             {"/sp  or  /speaketh",   "Open this splash screen"},
@@ -1495,6 +1545,7 @@ function Speaketh_UI:ShowSplash()
             {"/sp none",             "Disable translation"},
             {"/sp cycle",            "Cycle to next known language"},
             {"/sp dialect <name>",   "Set dialect  (gilnean, troll, drunk...)"},
+            {"/sp resetdialects",    "Reset built-in dialect rules to defaults"},
             {"/sp drunk <0-3>",      "Set drunkenness level"},
             {"/sp share <language>", "Generate an import code"},
             {"/sp import <code>",    "Import a custom language"},
@@ -1515,7 +1566,9 @@ function Speaketh_UI:ShowSplash()
         div3:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -400)
         div3:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -400)
         div3:SetHeight(1)
-        div3:SetColorTexture(0.55, 0.45, 0.20, 0.5)
+        Speaketh_Theme:Register(function(C)
+            local a = C.accent; div3:SetColorTexture(a[1], a[2], a[3], 0.5)
+        end)
 
         -- Footer
         local footer = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1569,6 +1622,22 @@ SlashCmdList["SPEAKETH"] = function(msg)
             Speaketh_UI:ToggleSpeakWindow()
         end
 
+    elseif cmd == "theme" then
+        local choice = (rest or ""):lower()
+        if choice == "void" then
+            Speaketh_Theme:Set("Void")
+        elseif choice == "classic" then
+            Speaketh_Theme:Set("Classic")
+        elseif choice == "" or choice == "toggle" then
+            Speaketh_Theme:Set(Speaketh_Theme:IsVoid() and "Classic" or "Void")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh]|r Usage: /sp theme [classic|void|toggle]")
+            return
+        end
+        if Speaketh_UI and Speaketh_UI.RefreshWindow then pcall(function() Speaketh_UI:RefreshWindow() end) end
+        if Speaketh_UI and Speaketh_UI.RefreshLanguageHUD then pcall(function() Speaketh_UI:RefreshLanguageHUD() end) end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00[Speaketh]|r Theme set to |cff88ccff" .. Speaketh_Theme:Current() .. "|r.")
+
     elseif cmd == "cycle" then
         Speaketh:CycleLanguage()
 
@@ -1615,6 +1684,22 @@ SlashCmdList["SPEAKETH"] = function(msg)
             Speaketh_UI:RefreshWindow()
         end
 
+    elseif cmd == "resetdialects" or cmd == "resetdialect" then
+        -- Hard reset of all built-in dialect word rules to factory defaults.
+        -- Clears corrupted/duplicated saved data. Custom dialects are kept.
+        if Speaketh_Dialects and Speaketh_Dialects.ResetBuiltinSubstitutes then
+            local n = Speaketh_Dialects:ResetBuiltinSubstitutes()
+            DEFAULT_CHAT_FRAME:AddMessage(string.format(
+                "|cffffcc00[Speaketh]|r Built-in dialect rules reset to defaults (%d rules). "
+                .. "Custom dialects were left untouched.", n or 0))
+            if Speaketh_UI and Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then
+                Speaketh_UI:RefreshWindow()
+            end
+        else
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00[Speaketh]|r Reset function unavailable - is the addon up to date?")
+        end
+
     elseif cmd == "drunk" then
         local level = tonumber(rest) or 0
         level = math.max(0, math.min(3, level))
@@ -1623,7 +1708,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
         if level > 0 then
             Speaketh_Dialects:SetActive("Drunk")
         end
-        local labels = {[0]="Sober", [1]="Tipsy", [2]="Drunk", [3]="Smashed"}
+        local labels = {[0]="Off", [1]="Tipsy", [2]="Drunk", [3]="Smashed"}
         DEFAULT_CHAT_FRAME:AddMessage(string.format(
             "|cffffcc00[Speaketh]|r Drunkenness set to %d (%s).", level, labels[level]))
         if Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then

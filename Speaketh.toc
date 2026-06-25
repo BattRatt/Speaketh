@@ -3,7 +3,7 @@
 ## Title: Speaketh
 ## Notes: Auto-translate chat into WoW racial languages and Shath'Yar. Switch languages via minimap button.
 ## Author: BattRatt
-## Version: 1.0.6
+## Version: 1.1.0
 ## SavedVariablesPerCharacter: Speaketh_Char
 ##==================================
 
@@ -11,6 +11,7 @@
 ## Category-enUS: Roleplay
 
 
+Speaketh_Theme.lua
 Speaketh_Languages.lua
 Speaketh_Fluency.lua
 Speaketh_Dialects.lua

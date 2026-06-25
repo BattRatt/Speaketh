@@ -1,6 +1,6 @@
 # Speaketh
 
-**Version 1.0.5** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
+**Version 1.1.0** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
 
 ---
 
@@ -15,7 +15,7 @@
 ### Dialects
 
 - **Built-in dialects:** Gilnean, Troll, and more, applied on top of any active language
-- **Drunk dialect:** four levels of drunkenness (Sober, Tipsy, Drunk, Smashed) that slur and distort your speech
+- **Drunk dialect:** four levels (Off, Tipsy, Drunk, Smashed) that slur and distort your speech
 - **Custom dialects:** build your own accent using word-swap rules
 
 ### Fluency

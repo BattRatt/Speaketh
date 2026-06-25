@@ -90,8 +90,12 @@ local function MakeCodeDialog(name, width, height)
             tile = true, tileSize = 32, edgeSize = 12,
             insets = { left = 4, right = 4, top = 4, bottom = 4 },
         })
-        f:SetBackdropColor(0.08, 0.08, 0.10, 0.97)
-        f:SetBackdropBorderColor(0.55, 0.45, 0.20, 1)
+        Speaketh_Theme:Register(function(C)
+            if not f.SetBackdropColor then return end
+            local bg, bd = C.slateBg, C.slateBorder
+            f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
+            f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
+        end)
     end
 
     -- Close X button
@@ -293,29 +297,46 @@ local function SetSV(key, value)
     Speaketh_Char[key] = value
 end
 
+-- Apply the theme's strong header color to a fontstring and keep it in
+-- sync on theme switches. Use for the pure-gold section headers.
+local function ThemeHeader(fs)
+    Speaketh_Theme:Register(function(C)
+        local t = C.headerGold
+        fs:SetTextColor(t[1], t[2], t[3], 1)
+    end)
+    return fs
+end
+
 -- ============================================================
 -- Shared widgets
 -- ============================================================
 
 -- Gold-styled button matching the Speaketh window aesthetic.
--- w, h are optional (defaults 62 x 20).
+-- w, h are optional (defaults 62 x 20). Re-skins live with the theme.
 local function GoldBtn(parent, label, w, h)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(w or 62, h or 20)
     local bg = btn:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints()
-    bg:SetColorTexture(0.72, 0.58, 0.25, 0.12)
     local border = btn:CreateTexture(nil, "BORDER"); border:SetAllPoints()
-    border:SetColorTexture(0.72, 0.58, 0.25, 0.35)
     local txt = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     txt:SetAllPoints(); txt:SetText(string.upper(label)); txt:SetSpacing(1.0)
-    txt:SetTextColor(0.85, 0.70, 0.35, 1)
     txt:SetJustifyH("CENTER"); txt:SetJustifyV("MIDDLE")
     btn.Text = txt; btn._bg = bg
+    Speaketh_Theme:Register(function(C)
+        local a, t = C.accent, C.btnText
+        bg:SetColorTexture(a[1], a[2], a[3], 0.12)
+        border:SetColorTexture(a[1], a[2], a[3], 0.35)
+        txt:SetTextColor(t[1], t[2], t[3], 1)
+    end)
     -- Route SetText/GetText to our custom fontstring so callers work normally
     btn.SetText = function(self, t) txt:SetText(t and string.upper(t) or "") end
     btn.GetText = function(self) return txt:GetText() end
-    btn:SetScript("OnEnter", function() bg:SetColorTexture(0.72, 0.58, 0.25, 0.25) end)
-    btn:SetScript("OnLeave", function() bg:SetColorTexture(0.72, 0.58, 0.25, 0.12) end)
+    btn:SetScript("OnEnter", function()
+        local a = Speaketh_Theme.C.accent; bg:SetColorTexture(a[1], a[2], a[3], 0.25)
+    end)
+    btn:SetScript("OnLeave", function()
+        local a = Speaketh_Theme.C.accent; bg:SetColorTexture(a[1], a[2], a[3], 0.12)
+    end)
     return btn
 end
 
@@ -332,6 +353,32 @@ local function MakeCheck(parent, label, tooltip, getVal, setVal)
     cb.refresh = function()
         cb:SetChecked(getVal() and true or false)
     end
+
+    -- Replace Blizzard's baked-gold checkmark with a white copy of the same
+    -- texture. SetVertexColor multiplies against the texture's pixel color, so
+    -- using the gold original gives orange when tinted purple. A desaturated
+    -- (white) texture lets our vertex color come through clean.
+    local ck = cb:GetCheckedTexture()
+    if ck then
+        ck:SetDesaturated(true)      -- strip the baked gold, leaving white/grey
+        ck:SetVertexColor(1, 1, 1, 1) -- reset to neutral white so our register sets it cleanly
+    end
+
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent
+        local t = cb:GetCheckedTexture()
+        if t then t:SetVertexColor(a[1], a[2], a[3], 1) end
+        local dk = cb.GetDisabledCheckedTexture and cb:GetDisabledCheckedTexture()
+        if dk then
+            dk:SetDesaturated(true)
+            dk:SetVertexColor(a[1], a[2], a[3], 0.4)
+        end
+        if cb.Text then
+            local tc = C.bodyText
+            cb.Text:SetTextColor(tc[1], tc[2], tc[3], 1)
+        end
+    end)
+
     return cb
 end
 
@@ -361,21 +408,24 @@ local function SelectCategory(key)
     if not _categoryPanels[key] then return end
     _activeKey = key
 
-    -- Button visuals: selected gets gold text + diamond + highlight bg
+    local C = Speaketh_Theme.C
+    local acc, hi, mut, dim = C.accent, C.btnTextHover, C.mutedText, C.dimText
+
+    -- Button visuals: selected gets accent text + diamond + highlight bg
     for k, btn in pairs(_categoryButtons) do
         if k == key then
-            if btn._bg then btn._bg:SetColorTexture(0.72, 0.58, 0.25, 0.15) end
-            if btn.Text then btn.Text:SetTextColor(0.95, 0.82, 0.48, 1) end
-            if btn._diamond then btn._diamond:SetTextColor(0.72, 0.58, 0.25, 1) end
+            if btn._bg then btn._bg:SetColorTexture(acc[1], acc[2], acc[3], 0.15) end
+            if btn.Text then btn.Text:SetTextColor(hi[1], hi[2], hi[3], 1) end
+            if btn._diamond then btn._diamond:SetTextColor(acc[1], acc[2], acc[3], 1) end
         else
             if btn._bg then btn._bg:SetColorTexture(0, 0, 0, 0) end
             if btn.Text then
                 -- top-level vs sub (sub buttons have a _dot marker)
                 if btn._diamond then
-                    btn.Text:SetTextColor(0.70, 0.58, 0.38, 1)
-                    btn._diamond:SetTextColor(0.72, 0.58, 0.25, 0)
+                    btn.Text:SetTextColor(mut[1], mut[2], mut[3], 1)
+                    btn._diamond:SetTextColor(acc[1], acc[2], acc[3], 0)
                 else
-                    btn.Text:SetTextColor(0.60, 0.50, 0.32, 1)
+                    btn.Text:SetTextColor(dim[1], dim[2], dim[3], 1)
                 end
             end
         end
@@ -408,28 +458,35 @@ local function AddCategory(key, label, buildContent, yOffset)
     local btnDiamond = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     btnDiamond:SetPoint("LEFT", btn, "LEFT", 4, 0)
     btnDiamond:SetText("|")
-    btnDiamond:SetTextColor(0.72, 0.58, 0.25, 0)  -- hidden by default
+    -- Alpha 0 = hidden by default; color is set live by the theme register below.
+    btnDiamond:SetTextColor(0.72, 0.58, 0.25, 0)
 
     local btnText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     btnText:SetPoint("LEFT", btnDiamond, "RIGHT", 6, 0)
     btnText:SetText(string.upper(label))
-    btnText:SetTextColor(0.70, 0.58, 0.38, 1)
     btnText:SetSpacing(1.5)
     btnText:SetJustifyH("LEFT")
     btn.Text = btnText
     btn._diamond = btnDiamond
     btn._bg = btnBg
+    Speaketh_Theme:Register(function(C)
+        if _activeKey ~= key then
+            local m = C.mutedText; btnText:SetTextColor(m[1], m[2], m[3], 1)
+        end
+    end)
 
     btn:SetScript("OnEnter", function(self)
         if _activeKey ~= key then
-            btnBg:SetColorTexture(0.72, 0.58, 0.25, 0.08)
-            btnText:SetTextColor(0.92, 0.78, 0.52, 1)
+            local a, h = Speaketh_Theme.C.accent, Speaketh_Theme.C.btnTextHover
+            btnBg:SetColorTexture(a[1], a[2], a[3], 0.08)
+            btnText:SetTextColor(h[1], h[2], h[3], 1)
         end
     end)
     btn:SetScript("OnLeave", function(self)
         if _activeKey ~= key then
+            local m = Speaketh_Theme.C.mutedText
             btnBg:SetColorTexture(0, 0, 0, 0)
-            btnText:SetTextColor(0.70, 0.58, 0.38, 1)
+            btnText:SetTextColor(m[1], m[2], m[3], 1)
         end
     end)
     btn:SetScript("OnClick", function() SelectCategory(key) end)
@@ -440,7 +497,9 @@ local function AddCategory(key, label, buildContent, yOffset)
     sep:SetPoint("BOTTOMLEFT",  btn, "BOTTOMLEFT",  0, -1)
     sep:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, -1)
     sep:SetHeight(1)
-    sep:SetColorTexture(0.72, 0.58, 0.25, 0.12)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; sep:SetColorTexture(a[1], a[2], a[3], 0.12)
+    end)
 
     -- Content panel
     local panel = CreateFrame("Frame", nil, _mainFrame)
@@ -453,14 +512,18 @@ local function AddCategory(key, label, buildContent, yOffset)
     local ptitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     ptitle:SetPoint("TOPLEFT", panel, "TOPLEFT", CONTENT_PAD_X, -6)
     ptitle:SetText(string.upper(label))
-    ptitle:SetTextColor(0.92, 0.78, 0.42, 1)
     ptitle:SetSpacing(2)
+    Speaketh_Theme:Register(function(C)
+        local t = C.title; ptitle:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     local div = panel:CreateTexture(nil, "ARTWORK")
     div:SetPoint("TOPLEFT",  ptitle, "BOTTOMLEFT", 0, -8)
     div:SetPoint("RIGHT",    panel,  "RIGHT", -CONTENT_PAD_X, 0)
     div:SetHeight(1)
-    div:SetColorTexture(0.72, 0.58, 0.25, 0.60)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; div:SetColorTexture(a[1], a[2], a[3], 0.60)
+    end)
 
     panel.body = CreateFrame("Frame", nil, panel)
     panel.body:SetPoint("TOPLEFT",     div,   "BOTTOMLEFT",    0,   -CONTENT_PAD_Y)
@@ -488,27 +551,35 @@ local function AddSubCategory(key, label, buildContent, yOffset)
     local btnDot = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     btnDot:SetPoint("LEFT", btn, "LEFT", 4, 0)
     btnDot:SetText("+")
-    btnDot:SetTextColor(0.72, 0.58, 0.25, 0.50)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; btnDot:SetTextColor(a[1], a[2], a[3], 0.50)
+    end)
 
     local btnText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     btnText:SetPoint("LEFT", btnDot, "RIGHT", 5, 0)
     btnText:SetText(string.upper(label))
-    btnText:SetTextColor(0.60, 0.50, 0.32, 1)
     btnText:SetSpacing(1.2)
     btnText:SetJustifyH("LEFT")
     btn.Text = btnText
     btn._bg  = btnBg
+    Speaketh_Theme:Register(function(C)
+        if _activeKey ~= key then
+            local d = C.dimText; btnText:SetTextColor(d[1], d[2], d[3], 1)
+        end
+    end)
 
     btn:SetScript("OnEnter", function()
         if _activeKey ~= key then
-            btnBg:SetColorTexture(0.72, 0.58, 0.25, 0.08)
-            btnText:SetTextColor(0.92, 0.78, 0.52, 1)
+            local a, h = Speaketh_Theme.C.accent, Speaketh_Theme.C.btnTextHover
+            btnBg:SetColorTexture(a[1], a[2], a[3], 0.08)
+            btnText:SetTextColor(h[1], h[2], h[3], 1)
         end
     end)
     btn:SetScript("OnLeave", function()
         if _activeKey ~= key then
+            local d = Speaketh_Theme.C.dimText
             btnBg:SetColorTexture(0, 0, 0, 0)
-            btnText:SetTextColor(0.60, 0.50, 0.32, 1)
+            btnText:SetTextColor(d[1], d[2], d[3], 1)
         end
     end)
     btn:SetScript("OnClick", function() SelectCategory(key) end)
@@ -523,14 +594,18 @@ local function AddSubCategory(key, label, buildContent, yOffset)
     local ptitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     ptitle:SetPoint("TOPLEFT", panel, "TOPLEFT", CONTENT_PAD_X, -6)
     ptitle:SetText(string.upper(label))
-    ptitle:SetTextColor(0.92, 0.78, 0.42, 1)
     ptitle:SetSpacing(2)
+    Speaketh_Theme:Register(function(C)
+        local t = C.title; ptitle:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     local div = panel:CreateTexture(nil, "ARTWORK")
     div:SetPoint("TOPLEFT",  ptitle, "BOTTOMLEFT", 0, -8)
     div:SetPoint("RIGHT",    panel,  "RIGHT", -CONTENT_PAD_X, 0)
     div:SetHeight(1)
-    div:SetColorTexture(0.72, 0.58, 0.25, 0.60)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; div:SetColorTexture(a[1], a[2], a[3], 0.60)
+    end)
 
     panel.body = CreateFrame("Frame", nil, panel)
     panel.body:SetPoint("TOPLEFT",     div,   "BOTTOMLEFT",    0,   -CONTENT_PAD_Y)
@@ -540,6 +615,29 @@ local function AddSubCategory(key, label, buildContent, yOffset)
     return panel
 end
 
+
+-- Section header: small-caps label with gold rule extending right.
+-- Returns the label fontstring (so callers can anchor body below it).
+-- Must be defined before any BuildXxxPanel function that calls it.
+local function DrawSectionHeader(parent, anchorFrame, anchorPoint, xOff, yOff, text)
+    local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbl:SetPoint("TOPLEFT", anchorFrame, anchorPoint, xOff, yOff)
+    lbl:SetText(string.upper(text))
+    lbl:SetSpacing(1.5)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; lbl:SetTextColor(a[1], a[2], a[3], 0.85)
+    end)
+
+    local rule = parent:CreateTexture(nil, "ARTWORK")
+    rule:SetHeight(1)
+    rule:SetPoint("LEFT",  lbl, "RIGHT", 6, 0)
+    rule:SetPoint("RIGHT", parent, "RIGHT", -CONTENT_PAD_X, 0)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; rule:SetColorTexture(a[1], a[2], a[3], 0.35)
+    end)
+
+    return lbl
+end
 
 -- ============================================================
 -- Category: General
@@ -599,11 +697,73 @@ local function BuildGeneralPanel(panel)
         function(v) SetSV("showLockdownNotify", v) end)
     lockdownCB:SetPoint("TOPLEFT", splashCB, "BOTTOMLEFT", 0, -4)
 
+    -- ---- Appearance / theme section ----
+    local themeHeader = DrawSectionHeader(body, lockdownCB, "BOTTOMLEFT", 0, -16, "Appearance")
+
+    local themeLabel = body:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    themeLabel:SetPoint("TOPLEFT", themeHeader, "BOTTOMLEFT", 0, -10)
+    themeLabel:SetText("UI Theme:")
+    Speaketh_Theme:Register(function(C)
+        local t = C.bodyText; themeLabel:SetTextColor(t[1], t[2], t[3], 1)
+    end)
+
+    -- Two toggle buttons: Classic / Void. Active one is highlighted.
+    local themeBtns = {}
+    local function RefreshThemeButtons()
+        local cur = Speaketh_Theme:Current()
+        local acc, hi, mut = Speaketh_Theme.C.accent, Speaketh_Theme.C.btnTextHover, Speaketh_Theme.C.btnText
+        for name, b in pairs(themeBtns) do
+            if name == cur then
+                b._bg:SetColorTexture(acc[1], acc[2], acc[3], 0.30)
+                b.Text:SetTextColor(hi[1], hi[2], hi[3], 1)
+            else
+                b._bg:SetColorTexture(acc[1], acc[2], acc[3], 0.10)
+                b.Text:SetTextColor(mut[1], mut[2], mut[3], 1)
+            end
+        end
+    end
+
+    local themeOpts = { { "Classic", "Classic" }, { "Void", "Void" } }
+    local prevTBtn
+    for i, opt in ipairs(themeOpts) do
+        local key, label = opt[1], opt[2]
+        local b = GoldBtn(body, label, 84, 22)
+        if i == 1 then
+            b:SetPoint("LEFT", themeLabel, "RIGHT", 12, 0)
+        else
+            b:SetPoint("LEFT", prevTBtn, "RIGHT", 8, 0)
+        end
+        b:SetScript("OnClick", function()
+            Speaketh_Theme:Set(key)
+            RefreshThemeButtons()
+            -- Refresh open windows so they reflect the change instantly.
+            if Speaketh_UI and Speaketh_UI.RefreshWindow then
+                pcall(function() Speaketh_UI:RefreshWindow() end)
+            end
+            if Speaketh_UI and Speaketh_UI.RefreshLanguageHUD then
+                pcall(function() Speaketh_UI:RefreshLanguageHUD() end)
+            end
+        end)
+        -- Keep hover from overriding the active-state tint.
+        b:SetScript("OnEnter", function()
+            if Speaketh_Theme:Current() ~= key then
+                local a = Speaketh_Theme.C.accent
+                b._bg:SetColorTexture(a[1], a[2], a[3], 0.22)
+            end
+        end)
+        b:SetScript("OnLeave", function() RefreshThemeButtons() end)
+        themeBtns[key] = b
+        prevTBtn = b
+    end
+
+    -- Reflect the active theme whenever this panel rebuilds / theme changes.
+    Speaketh_Theme:Register(RefreshThemeButtons)
+
     -- ---- Channel enable/disable section ----
     local chanHeader = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    chanHeader:SetPoint("TOPLEFT", lockdownCB, "BOTTOMLEFT", 0, -16)
+    chanHeader:SetPoint("TOPLEFT", themeLabel, "BOTTOMLEFT", 0, -28)
     chanHeader:SetText("Translate in channels:")
-    chanHeader:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(chanHeader)
 
     local chanDefs = {
         { key="chanSay",      label="/say",           tip="Translate messages sent in /say." },
@@ -776,7 +936,7 @@ local function MakeListHeader(parent, anchor, title)
     local hdr = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     hdr:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -8)
     hdr:SetText(title)
-    hdr:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(hdr)
     local cnt = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     cnt:SetPoint("LEFT", hdr, "RIGHT", 8, 0)
     cnt:SetTextColor(0.6, 0.6, 0.6, 1)
@@ -812,7 +972,9 @@ local function BuildDialectRulesPanel(panel)
     tabDiv:SetPoint("TOPLEFT",  body, "TOPLEFT",  0, TAB_Y - TAB_H - 2)
     tabDiv:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, TAB_Y - TAB_H - 2)
     tabDiv:SetHeight(2)
-    tabDiv:SetColorTexture(0.60, 0.48, 0.22, 0.75)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; tabDiv:SetColorTexture(a[1], a[2], a[3], 0.75)
+    end)
 
     local selectedDialect = nil
     local tabBtns = {}
@@ -821,10 +983,11 @@ local function BuildDialectRulesPanel(panel)
 
     local function SelectTab(key)
         selectedDialect = key
+        local hg = Speaketh_Theme.C.headerGold
         for k, btn in pairs(tabBtns) do
             if k == key then
                 btn:LockHighlight()
-                if btn.Text then btn.Text:SetTextColor(1.0, 0.82, 0.0, 1) end
+                if btn.Text then btn.Text:SetTextColor(hg[1], hg[2], hg[3], 1) end
             else
                 btn:UnlockHighlight()
                 if btn.Text then btn.Text:SetTextColor(0.9, 0.9, 0.9, 1) end
@@ -857,7 +1020,8 @@ local function BuildDialectRulesPanel(panel)
         for k, btn in pairs(tabBtns) do
             if k == selectedDialect then
                 btn:LockHighlight()
-                if btn.Text then btn.Text:SetTextColor(1.0, 0.82, 0.0, 1) end
+                local hg = Speaketh_Theme.C.headerGold
+                if btn.Text then btn.Text:SetTextColor(hg[1], hg[2], hg[3], 1) end
             end
         end
     end
@@ -873,7 +1037,7 @@ local function BuildDialectRulesPanel(panel)
     local inputLabel = inputRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     inputLabel:SetPoint("LEFT", inputRow, "LEFT", 0, 0)
     inputLabel:SetText("Replace:")
-    inputLabel:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(inputLabel)
 
     local fromBox = CreateFrame("EditBox", nil, inputRow, "InputBoxTemplate")
     fromBox:SetSize(112, 22)
@@ -968,7 +1132,9 @@ local function BuildDialectRulesPanel(panel)
             row:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -y)
             row:SetHeight(22)
             local bg = row:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints()
-            if isEditing then bg:SetColorTexture(0.55, 0.45, 0.20, 0.12)
+            if isEditing then
+                local a = Speaketh_Theme.C.accent
+                bg:SetColorTexture(a[1], a[2], a[3], 0.12)
             elseif i%2==0 then bg:SetColorTexture(1,1,1,0.03)
             else bg:SetColorTexture(0,0,0,0) end
 
@@ -977,7 +1143,7 @@ local function BuildDialectRulesPanel(panel)
             ft:SetText("|cffcccccc" .. entry[1] .. "|r")
 
             local at = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            at:SetPoint("LEFT", ft, "RIGHT", 2, 0); at:SetText("->"); at:SetTextColor(0.55,0.45,0.20,1)
+            at:SetPoint("LEFT", ft, "RIGHT", 2, 0); at:SetText("->"); do local a = Speaketh_Theme.C.accent; at:SetTextColor(a[1], a[2], a[3], 1) end
 
             local tt = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             tt:SetPoint("LEFT", at, "RIGHT", 2, 0); tt:SetWidth(130); tt:SetJustifyH("LEFT")
@@ -1052,6 +1218,15 @@ local function BuildDialectRulesPanel(panel)
         if active and active ~= "Drunk" then selectedDialect = active end
         ClearEdit(); RebuildTabs(); RebuildContent()
     end
+
+    -- Re-apply tab highlight colors when the theme switches.
+    -- SelectTab is imperative so we need an explicit re-skin hook here.
+    Speaketh_Theme:Register(function()
+        if selectedDialect then
+            SelectTab(selectedDialect)
+        end
+    end)
+
     RebuildTabs()
     if selectedDialect then SelectTab(selectedDialect) else RebuildContent() end
 end
@@ -1073,7 +1248,7 @@ local function BuildNewDialectPanel(panel)
     local nameLbl = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     nameLbl:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -14)
     nameLbl:SetText("Dialect name:")
-    nameLbl:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(nameLbl)
 
     local nameBox = CreateFrame("EditBox", nil, body, "InputBoxTemplate")
     nameBox:SetSize(160, 22)
@@ -1176,7 +1351,7 @@ local function BuildNewLanguagePanel(panel)
     local nameLbl = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     nameLbl:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -14)
     nameLbl:SetText("Language name:")
-    nameLbl:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(nameLbl)
 
     local nameBox = CreateFrame("EditBox", nil, body, "InputBoxTemplate")
     nameBox:SetSize(180, 22)
@@ -1193,7 +1368,7 @@ local function BuildNewLanguagePanel(panel)
     local wordLbl = wordRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     wordLbl:SetPoint("LEFT", wordRow, "LEFT", 0, 0)
     wordLbl:SetText("Words:")
-    wordLbl:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(wordLbl)
 
     local wordHint = wordRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     wordHint:SetPoint("LEFT", wordLbl, "RIGHT", 6, 0)
@@ -1225,7 +1400,7 @@ local function BuildNewLanguagePanel(panel)
     local listHdr = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     listHdr:SetPoint("TOPLEFT", statusLbl, "BOTTOMLEFT", 0, -8)
     listHdr:SetText("Your custom languages")
-    listHdr:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(listHdr)
 
     local _, content, rows, WipeRows = MakeScrollList(body, listHdr, body)
 
@@ -1256,7 +1431,7 @@ local function BuildNewLanguagePanel(panel)
 
                 local fl = Speaketh_Fluency and math.floor(Speaketh_Fluency:Get(key)) or 0
                 local fc = row:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-                fc:SetPoint("LEFT",wc,"RIGHT",8,0); fc:SetText(fl.."%% fluency"); fc:SetTextColor(0.55,0.75,1.0,1)
+                fc:SetPoint("LEFT",wc,"RIGHT",8,0); fc:SetText(fl.."%% fluency"); do local ib = Speaketh_Theme.C.infoBlue; fc:SetTextColor(ib[1],ib[2],ib[3],1) end
 
                 local delBtn = GoldBtn(row, "")
                 delBtn:SetSize(52,18); delBtn:SetPoint("RIGHT",row,"RIGHT",-4,0); delBtn:SetText("Delete")
@@ -1401,7 +1576,7 @@ local function BuildPassthroughPanel(panel)
     local wordLbl = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     wordLbl:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -14)
     wordLbl:SetText("Word:")
-    wordLbl:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(wordLbl)
 
     local wordBox = CreateFrame("EditBox", nil, body, "InputBoxTemplate")
     wordBox:SetSize(180, 22)
@@ -1506,7 +1681,7 @@ local function BuildAboutPanel(panel)
     -- Features
     local featHead = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     featHead:SetPoint("TOPLEFT", ver, "BOTTOMLEFT", 0, -14)
-    featHead:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(featHead)
     featHead:SetText("Features")
 
     local featureList = {
@@ -1532,7 +1707,7 @@ local function BuildAboutPanel(panel)
     -- Commands
     local cmdHead = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     cmdHead:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", -6, -14)
-    cmdHead:SetTextColor(1.0, 0.82, 0.0, 1)
+    ThemeHeader(cmdHead)
     cmdHead:SetText("Slash Commands")
 
     local commands = {
@@ -1574,7 +1749,6 @@ local function DrawCorner(parent, corner)
     local SIZE  = 28   -- arm length
     local THICK = 2
     local DOT   = 5    -- diamond half-size
-    local r, g, b, a = 0.72, 0.58, 0.25, 0.90
 
     local ox, oy, sx, sy
     if corner == "TL" then ox, oy, sx, sy = 1, -1,  1,  -1
@@ -1583,11 +1757,13 @@ local function DrawCorner(parent, corner)
     else                       ox, oy, sx, sy = -1,  1, -1,   1
     end
 
+    local cornerTex = {}
+
     -- Horizontal arm
     local h = parent:CreateTexture(nil, "OVERLAY")
     h:SetHeight(THICK)
     h:SetWidth(SIZE)
-    h:SetColorTexture(r, g, b, a)
+    table.insert(cornerTex, h)
     if corner == "TL" then
         h:SetPoint("TOPLEFT",     parent, "TOPLEFT",     ox * 6, oy * 6)
     elseif corner == "TR" then
@@ -1602,7 +1778,7 @@ local function DrawCorner(parent, corner)
     local v = parent:CreateTexture(nil, "OVERLAY")
     v:SetWidth(THICK)
     v:SetHeight(SIZE)
-    v:SetColorTexture(r, g, b, a)
+    table.insert(cornerTex, v)
     if corner == "TL" then
         v:SetPoint("TOPLEFT",     parent, "TOPLEFT",     ox * 6, oy * 6)
     elseif corner == "TR" then
@@ -1616,8 +1792,8 @@ local function DrawCorner(parent, corner)
     -- Diamond nib at the corner tip
     local d = parent:CreateTexture(nil, "OVERLAY")
     d:SetSize(DOT, DOT)
-    d:SetColorTexture(r, g, b, a)
     d:SetRotation(math.rad(45))
+    table.insert(cornerTex, d)
     if corner == "TL" then
         d:SetPoint("CENTER", parent, "TOPLEFT",     ox * 6, oy * 6)
     elseif corner == "TR" then
@@ -1627,24 +1803,13 @@ local function DrawCorner(parent, corner)
     else
         d:SetPoint("CENTER", parent, "BOTTOMRIGHT", ox * 6, oy * 6)
     end
-end
 
--- Section header: small-caps label with gold rule extending right.
--- Returns the label fontstring (so callers can anchor body below it).
-local function DrawSectionHeader(parent, anchorFrame, anchorPoint, xOff, yOff, text)
-    local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    lbl:SetPoint("TOPLEFT", anchorFrame, anchorPoint, xOff, yOff)
-    lbl:SetText(string.upper(text))
-    lbl:SetTextColor(0.72, 0.58, 0.25, 0.85)
-    lbl:SetSpacing(1.5)
-
-    local rule = parent:CreateTexture(nil, "ARTWORK")
-    rule:SetHeight(1)
-    rule:SetPoint("LEFT",  lbl, "RIGHT", 6, 0)
-    rule:SetPoint("RIGHT", parent, "RIGHT", -CONTENT_PAD_X, 0)
-    rule:SetColorTexture(0.72, 0.58, 0.25, 0.35)
-
-    return lbl
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent
+        for _, tex in ipairs(cornerTex) do
+            tex:SetColorTexture(a[1], a[2], a[3], 0.90)
+        end
+    end)
 end
 
 local function BuildFrame()
@@ -1672,15 +1837,31 @@ local function BuildFrame()
             tile = true, tileSize = 32, edgeSize = 26,
             insets = { left = 8, right = 8, top = 8, bottom = 8 },
         })
-        f:SetBackdropColor(0.09, 0.06, 0.02, 0.98)
-        f:SetBackdropBorderColor(0.55, 0.42, 0.15, 1)
+        Speaketh_Theme:Register(function(C)
+            if not f.SetBackdropColor then return end
+            local bg, bd = C.backdropBg, C.backdropBorder
+            f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
+            f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
+        end)
     end
 
-    -- Subtle inner vignette overlay for warmth
+    -- Subtle inner vignette overlay for warmth (Classic) / void (Void)
     local vignette = f:CreateTexture(nil, "BACKGROUND", nil, 1)
     vignette:SetAllPoints()
     vignette:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Background-Dark")
-    vignette:SetVertexColor(0.14, 0.09, 0.03, 0.45)
+    Speaketh_Theme:Register(function(C)
+        if Speaketh_Theme:IsVoid() then
+            vignette:SetVertexColor(0.06, 0.02, 0.12, 0.55)
+        else
+            vignette:SetVertexColor(0.14, 0.09, 0.03, 0.45)
+        end
+    end)
+
+    -- Void-only atmospheric decoration (hidden in Classic)
+    Speaketh_Theme:AddVoidVignette(f)
+    Speaketh_Theme:AddVoidInkBleed(f)
+    Speaketh_Theme:AddVoidGlowPulse(f)
+    Speaketh_Theme:AddVoidRunes(f, 14, 26)
 
     -- ── Corner ornaments ───────────────────────────────────────
     DrawCorner(f, "TL")
@@ -1693,22 +1874,28 @@ local function BuildFrame()
     local titleBar = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     titleBar:SetPoint("TOP", f, "TOP", 0, -18)
     titleBar:SetText("S P E A K E T H")
-    titleBar:SetTextColor(0.92, 0.78, 0.42, 1)
     titleBar:SetSpacing(2)
+    Speaketh_Theme:Register(function(C)
+        local t = C.title; titleBar:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     -- Gold rule under title
     local titleDiv = f:CreateTexture(nil, "ARTWORK")
     titleDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  34, -38)
     titleDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -34, -38)
     titleDiv:SetHeight(1)
-    titleDiv:SetColorTexture(0.72, 0.58, 0.25, 0.80)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; titleDiv:SetColorTexture(a[1], a[2], a[3], 0.80)
+    end)
 
     -- Subtle second rule for depth
     local titleDiv2 = f:CreateTexture(nil, "ARTWORK")
     titleDiv2:SetPoint("TOPLEFT",  f, "TOPLEFT",  34, -41)
     titleDiv2:SetPoint("TOPRIGHT", f, "TOPRIGHT", -34, -41)
     titleDiv2:SetHeight(1)
-    titleDiv2:SetColorTexture(0.72, 0.58, 0.25, 0.25)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; titleDiv2:SetColorTexture(a[1], a[2], a[3], 0.25)
+    end)
 
     -- ── Custom close button ────────────────────────────────────
     local closeBtn = CreateFrame("Button", nil, f)
@@ -1718,21 +1905,30 @@ local function BuildFrame()
 
     local closeBg = closeBtn:CreateTexture(nil, "BACKGROUND")
     closeBg:SetAllPoints()
-    closeBg:SetColorTexture(0.55, 0.10, 0.08, 0.90)
 
     local closeBorder = closeBtn:CreateTexture(nil, "BORDER")
     closeBorder:SetAllPoints()
-    closeBorder:SetColorTexture(0.72, 0.38, 0.20, 0.80)
 
     local closeX = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     closeX:SetAllPoints()
     closeX:SetText("×")
-    closeX:SetTextColor(1, 0.85, 0.75, 1)
     closeX:SetJustifyH("CENTER")
     closeX:SetJustifyV("MIDDLE")
 
-    closeBtn:SetScript("OnEnter", function() closeBg:SetColorTexture(0.72, 0.15, 0.10, 1) end)
-    closeBtn:SetScript("OnLeave", function() closeBg:SetColorTexture(0.55, 0.10, 0.08, 0.90) end)
+    Speaketh_Theme:Register(function(C)
+        local bg, bd, x = C.closeBg, C.closeBorder, C.closeX
+        closeBg:SetColorTexture(bg[1], bg[2], bg[3], bg[4])
+        closeBorder:SetColorTexture(bd[1], bd[2], bd[3], bd[4])
+        closeX:SetTextColor(x[1], x[2], x[3], x[4])
+    end)
+    closeBtn:SetScript("OnEnter", function()
+        local h = Speaketh_Theme.C.closeBgHover
+        closeBg:SetColorTexture(h[1], h[2], h[3], h[4])
+    end)
+    closeBtn:SetScript("OnLeave", function()
+        local b = Speaketh_Theme.C.closeBg
+        closeBg:SetColorTexture(b[1], b[2], b[3], b[4])
+    end)
 
     -- ── Sidebar ────────────────────────────────────────────────
     -- Sidebar dark panel background
@@ -1740,21 +1936,27 @@ local function BuildFrame()
     sideBg:SetPoint("TOPLEFT",    f, "TOPLEFT",    8,     -44)
     sideBg:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 8,      20)
     sideBg:SetWidth(SIDE_W - 10)
-    sideBg:SetColorTexture(0.04, 0.03, 0.01, 0.60)
+    Speaketh_Theme:Register(function(C)
+        local s = C.sidebarBg; sideBg:SetColorTexture(s[1], s[2], s[3], s[4])
+    end)
 
     -- Vertical divider between sidebar and content
     local sideDiv = f:CreateTexture(nil, "ARTWORK")
     sideDiv:SetPoint("TOPLEFT",    f, "TOPLEFT",    SIDE_W,  -44)
     sideDiv:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE_W,   20)
     sideDiv:SetWidth(1)
-    sideDiv:SetColorTexture(0.72, 0.58, 0.25, 0.50)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; sideDiv:SetColorTexture(a[1], a[2], a[3], 0.50)
+    end)
 
     -- Second subtle rule for depth
     local sideDiv2 = f:CreateTexture(nil, "ARTWORK")
     sideDiv2:SetPoint("TOPLEFT",    f, "TOPLEFT",    SIDE_W + 3, -44)
     sideDiv2:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE_W + 3,  20)
     sideDiv2:SetWidth(1)
-    sideDiv2:SetColorTexture(0.72, 0.58, 0.25, 0.15)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; sideDiv2:SetColorTexture(a[1], a[2], a[3], 0.15)
+    end)
 
     _mainFrame = f
 
@@ -1815,22 +2017,40 @@ function Speaketh_Options:Open()
         local wrDiamond = wrBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         wrDiamond:SetPoint("LEFT", wrBtn, "LEFT", 4, 0)
         wrDiamond:SetText("|")
-        wrDiamond:SetTextColor(0.72, 0.58, 0.25, 0)
 
         local wrText = wrBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         wrText:SetPoint("LEFT", wrDiamond, "RIGHT", 6, 0)
         wrText:SetText("WORD RULES")
-        wrText:SetTextColor(0.70, 0.58, 0.38, 1)
         wrText:SetSpacing(1.5)
         wrBtn.Text = wrText
         wrBtn._diamond = wrDiamond
         wrBtn._bg = wrBg
+        -- Default (collapsed) coloring, refreshed on theme switch.
+        -- SetWordRulesExpanded handles both states; the Register below is
+        -- kept only as a fallback for the initial paint before wrExpanded exists.
+        Speaketh_Theme:Register(function(C)
+            local m, a = C.mutedText, C.accent
+            -- wrExpanded may not exist yet at registration time (it's a local
+            -- further down). Use the stored flag on the button instead.
+            if not wrBtn.__expanded then
+                wrText:SetTextColor(m[1], m[2], m[3], 1)
+                wrDiamond:SetTextColor(a[1], a[2], a[3], 0)
+                wrBg:SetColorTexture(0, 0, 0, 0)
+            else
+                local hi = C.btnTextHover
+                wrBg:SetColorTexture(a[1], a[2], a[3], 0.15)
+                wrText:SetTextColor(hi[1], hi[2], hi[3], 1)
+                wrDiamond:SetTextColor(a[1], a[2], a[3], 1)
+            end
+        end)
 
         local wrSep = _mainFrame:CreateTexture(nil, "ARTWORK")
         wrSep:SetPoint("BOTTOMLEFT",  wrBtn, "BOTTOMLEFT",  0, -1)
         wrSep:SetPoint("BOTTOMRIGHT", wrBtn, "BOTTOMRIGHT", 0, -1)
         wrSep:SetHeight(1)
-        wrSep:SetColorTexture(0.72, 0.58, 0.25, 0.12)
+        Speaketh_Theme:Register(function(C)
+            local a = C.accent; wrSep:SetColorTexture(a[1], a[2], a[3], 0.12)
+        end)
 
         -- Sub-category buttons (start hidden)
         local subY = wrY - (ROW_H + SUB_GAP)
@@ -1863,16 +2083,20 @@ function Speaketh_Options:Open()
         local function SetWordRulesExpanded(expanded)
             wrExpanded = expanded
             if expanded then
-                wrBg:SetColorTexture(0.72, 0.58, 0.25, 0.15)
-                wrText:SetTextColor(0.95, 0.82, 0.48, 1)
-                wrDiamond:SetTextColor(0.72, 0.58, 0.25, 1)
+                wrBtn.__expanded = true
+                local a, hi = Speaketh_Theme.C.accent, Speaketh_Theme.C.btnTextHover
+                wrBg:SetColorTexture(a[1], a[2], a[3], 0.15)
+                wrText:SetTextColor(hi[1], hi[2], hi[3], 1)
+                wrDiamond:SetTextColor(a[1], a[2], a[3], 1)
                 for _, btn in ipairs(subBtns) do btn:Show() end
                 aboutBtn:ClearAllPoints()
                 aboutBtn:SetPoint("TOPLEFT", _mainFrame, "TOPLEFT", SIDE_INSET, aboutExpandedY)
             else
+                wrBtn.__expanded = false
+                local a, m = Speaketh_Theme.C.accent, Speaketh_Theme.C.mutedText
                 wrBg:SetColorTexture(0, 0, 0, 0)
-                wrText:SetTextColor(0.70, 0.58, 0.38, 1)
-                wrDiamond:SetTextColor(0.72, 0.58, 0.25, 0)
+                wrText:SetTextColor(m[1], m[2], m[3], 1)
+                wrDiamond:SetTextColor(a[1], a[2], a[3], 0)
                 for _, btn in ipairs(subBtns) do btn:Hide() end
                 -- If a sub-panel is showing, hide it when collapsing
                 local subKeys = {"dialectrules","newdialect","newlanguage","passthrough"}
@@ -1904,12 +2128,23 @@ function Speaketh_Options:Open()
         for _, btn in ipairs(subBtns) do
             local orig = btn:GetScript("OnClick")
             btn:SetScript("OnClick", function(self)
-                wrBg:SetColorTexture(0.72, 0.58, 0.25, 0.15)
-                wrText:SetTextColor(0.95, 0.82, 0.48, 1)
-                wrDiamond:SetTextColor(0.72, 0.58, 0.25, 1)
+                wrBtn.__expanded = true
+                local a, hi = Speaketh_Theme.C.accent, Speaketh_Theme.C.btnTextHover
+                wrBg:SetColorTexture(a[1], a[2], a[3], 0.15)
+                wrText:SetTextColor(hi[1], hi[2], hi[3], 1)
+                wrDiamond:SetTextColor(a[1], a[2], a[3], 1)
                 orig(self)
             end)
         end
+        -- Theme-switch re-skin for the sidebar active state and Word Rules.
+        -- This must be registered AFTER all buttons exist so SelectCategory
+        -- and SetWordRulesExpanded can reference them without nil-checking.
+        Speaketh_Theme:Register(function()
+            -- Re-apply the active category button highlight with new tokens.
+            if _activeKey then SelectCategory(_activeKey) end
+            -- Re-apply Word Rules expanded/collapsed coloring.
+            SetWordRulesExpanded(wrExpanded)
+        end)
     end
     SelectCategory(_activeKey or "general")
     _mainFrame:Show()

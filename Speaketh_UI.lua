@@ -201,22 +201,32 @@ function Speaketh_UI:CreateSpeakWindow()
             tile = true, tileSize = 32, edgeSize = 26,
             insets = { left = 8, right = 8, top = 8, bottom = 8 },
         })
-        win:SetBackdropColor(0.09, 0.06, 0.02, 0.98)
-        win:SetBackdropBorderColor(0.55, 0.42, 0.15, 1)
+        Speaketh_Theme:Register(function(C)
+            if not win.SetBackdropColor then return end
+            local bg, bd = C.slateBg, C.slateBorder
+            win:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
+            win:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
+        end)
     end
 
+    -- Void-only atmospheric decoration (hidden in Classic)
+    Speaketh_Theme:AddVoidVignette(win)
+    Speaketh_Theme:AddVoidInkBleed(win)
+    Speaketh_Theme:AddVoidGlowPulse(win)
+    Speaketh_Theme:AddVoidRunes(win, 9, 20)
+
     -- Corner ornaments (small version, arm 18px)
+    local _miniCornerTex = {}
     local function DrawMiniCorner(parent, corner)
-        local SIZE, THICK, r, g, b, a = 18, 1, 0.72, 0.58, 0.25, 0.85
+        local SIZE, THICK = 18, 1
         local ox, oy, sx, sy
         if corner == "TL" then ox,oy,sx,sy =  1,-1, 1,-1
         elseif corner == "TR" then ox,oy,sx,sy = -1,-1,-1,-1
         elseif corner == "BL" then ox,oy,sx,sy =  1, 1, 1, 1
         else                       ox,oy,sx,sy = -1, 1,-1, 1 end
         local h = parent:CreateTexture(nil,"OVERLAY"); h:SetHeight(THICK); h:SetWidth(SIZE)
-        h:SetColorTexture(r,g,b,a)
         local v = parent:CreateTexture(nil,"OVERLAY"); v:SetWidth(THICK); v:SetHeight(SIZE)
-        v:SetColorTexture(r,g,b,a)
+        table.insert(_miniCornerTex, h); table.insert(_miniCornerTex, v)
         if corner == "TL" then
             h:SetPoint("TOPLEFT",     parent, "TOPLEFT",     ox*8, oy*8)
             v:SetPoint("TOPLEFT",     parent, "TOPLEFT",     ox*8, oy*8)
@@ -233,19 +243,30 @@ function Speaketh_UI:CreateSpeakWindow()
     end
     DrawMiniCorner(win,"TL"); DrawMiniCorner(win,"TR")
     DrawMiniCorner(win,"BL"); DrawMiniCorner(win,"BR")
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent
+        local alpha = Speaketh_Theme:IsVoid() and 1.0 or 0.85
+        for _, tex in ipairs(_miniCornerTex) do
+            tex:SetColorTexture(a[1], a[2], a[3], alpha)
+        end
+    end)
 
     -- ── Title ──────────────────────────────────────────────────
     local title = win:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", win, "TOP", 0, -14)
     title:SetText("S P E A K E T H")
-    title:SetTextColor(0.88, 0.74, 0.38, 1)
     title:SetSpacing(1.5)
+    Speaketh_Theme:Register(function(C)
+        local t = C.title; title:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     local titleDiv = win:CreateTexture(nil, "ARTWORK")
     titleDiv:SetPoint("TOPLEFT",  win, "TOPLEFT",  22, -30)
     titleDiv:SetPoint("TOPRIGHT", win, "TOPRIGHT", -22, -30)
     titleDiv:SetHeight(1)
-    titleDiv:SetColorTexture(0.72, 0.58, 0.25, 0.55)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; titleDiv:SetColorTexture(a[1], a[2], a[3], 0.55)
+    end)
 
     -- Custom close button (red circle style)
     local closeBtn = CreateFrame("Button", nil, win)
@@ -253,12 +274,23 @@ function Speaketh_UI:CreateSpeakWindow()
     closeBtn:SetPoint("TOPRIGHT", win, "TOPRIGHT", -10, -10)
     closeBtn:SetScript("OnClick", function() win:Hide() end)
     local closeBg = closeBtn:CreateTexture(nil,"BACKGROUND")
-    closeBg:SetAllPoints(); closeBg:SetColorTexture(0.55,0.10,0.08,0.90)
+    closeBg:SetAllPoints()
     local closeX = closeBtn:CreateFontString(nil,"OVERLAY","GameFontNormal")
-    closeX:SetAllPoints(); closeX:SetText("×"); closeX:SetTextColor(1,0.85,0.75,1)
+    closeX:SetAllPoints(); closeX:SetText("×")
     closeX:SetJustifyH("CENTER"); closeX:SetJustifyV("MIDDLE")
-    closeBtn:SetScript("OnEnter", function() closeBg:SetColorTexture(0.72,0.15,0.10,1) end)
-    closeBtn:SetScript("OnLeave", function() closeBg:SetColorTexture(0.55,0.10,0.08,0.90) end)
+    Speaketh_Theme:Register(function(C)
+        local bg, x = C.closeBg, C.closeX
+        closeBg:SetColorTexture(bg[1], bg[2], bg[3], bg[4])
+        closeX:SetTextColor(x[1], x[2], x[3], x[4])
+    end)
+    closeBtn:SetScript("OnEnter", function()
+        local h = Speaketh_Theme.C.closeBgHover
+        closeBg:SetColorTexture(h[1], h[2], h[3], h[4])
+    end)
+    closeBtn:SetScript("OnLeave", function()
+        local b = Speaketh_Theme.C.closeBg
+        closeBg:SetColorTexture(b[1], b[2], b[3], b[4])
+    end)
 
     local optionsBtn = CreateFrame("Button", nil, win)
     optionsBtn:SetSize(60, 18)
@@ -267,47 +299,65 @@ function Speaketh_UI:CreateSpeakWindow()
         if Speaketh_Options and Speaketh_Options.Open then Speaketh_Options:Open() end
     end)
     local optBg = optionsBtn:CreateTexture(nil,"BACKGROUND"); optBg:SetAllPoints()
-    optBg:SetColorTexture(0.72,0.58,0.25,0.12)
     local optBorder = optionsBtn:CreateTexture(nil,"BORDER"); optBorder:SetAllPoints()
-    optBorder:SetColorTexture(0.72,0.58,0.25,0.35)
     local optText = optionsBtn:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
     optText:SetAllPoints(); optText:SetText("OPTIONS"); optText:SetSpacing(1.2)
-    optText:SetTextColor(0.85,0.70,0.35,1); optText:SetJustifyH("CENTER"); optText:SetJustifyV("MIDDLE")
-    optionsBtn:SetScript("OnEnter", function() optBg:SetColorTexture(0.72,0.58,0.25,0.22) end)
-    optionsBtn:SetScript("OnLeave", function() optBg:SetColorTexture(0.72,0.58,0.25,0.12) end)
+    optText:SetJustifyH("CENTER"); optText:SetJustifyV("MIDDLE")
+    Speaketh_Theme:Register(function(C)
+        local a, t = C.accent, C.btnText
+        optBg:SetColorTexture(a[1], a[2], a[3], 0.12)
+        optBorder:SetColorTexture(a[1], a[2], a[3], 0.35)
+        optText:SetTextColor(t[1], t[2], t[3], 1)
+    end)
     optionsBtn:SetScript("OnEnter", function(self)
-        optBg:SetColorTexture(0.72,0.58,0.25,0.22)
+        local a = Speaketh_Theme.C.accent
+        optBg:SetColorTexture(a[1], a[2], a[3], 0.22)
         GameTooltip:SetOwner(self,"ANCHOR_TOP")
         GameTooltip:AddLine("Speaketh Options"); GameTooltip:AddLine("|cffaaaaaaOpen the settings panel|r"); GameTooltip:Show()
     end)
-    optionsBtn:SetScript("OnLeave", function() optBg:SetColorTexture(0.72,0.58,0.25,0.12); GameTooltip:Hide() end)
+    optionsBtn:SetScript("OnLeave", function()
+        local a = Speaketh_Theme.C.accent
+        optBg:SetColorTexture(a[1], a[2], a[3], 0.12); GameTooltip:Hide()
+    end)
 
     -- ── Language section ───────────────────────────────────────
     local langHeader = win:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     langHeader:SetPoint("TOPLEFT", win, "TOPLEFT", 18, -40)
     langHeader:SetText("LANGUAGE")
-    langHeader:SetTextColor(0.72, 0.58, 0.25, 0.80)
     langHeader:SetSpacing(1.5)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; langHeader:SetTextColor(a[1], a[2], a[3], 0.85)
+    end)
 
     local langRule = win:CreateTexture(nil,"ARTWORK"); langRule:SetHeight(1)
     langRule:SetPoint("LEFT", langHeader, "RIGHT", 6, 0)
     langRule:SetPoint("RIGHT", win, "RIGHT", -18, 0)
-    langRule:SetColorTexture(0.72, 0.58, 0.25, 0.25)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; langRule:SetColorTexture(a[1], a[2], a[3], 0.25)
+    end)
 
     -- Small styled buttons
     local function MakeWinBtn(parent, label, w)
         local btn = CreateFrame("Button", nil, parent)
         btn:SetSize(w or 62, 18)
         local bg = btn:CreateTexture(nil,"BACKGROUND"); bg:SetAllPoints()
-        bg:SetColorTexture(0.72,0.58,0.25,0.12)
         local border = btn:CreateTexture(nil,"BORDER"); border:SetAllPoints()
-        border:SetColorTexture(0.72,0.58,0.25,0.35)
         local txt = btn:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         txt:SetAllPoints(); txt:SetText(string.upper(label)); txt:SetSpacing(1.0)
-        txt:SetTextColor(0.85,0.70,0.35,1); txt:SetJustifyH("CENTER"); txt:SetJustifyV("MIDDLE")
+        txt:SetJustifyH("CENTER"); txt:SetJustifyV("MIDDLE")
         btn.Text = txt; btn._bg = bg
-        btn:SetScript("OnEnter", function() bg:SetColorTexture(0.72,0.58,0.25,0.25) end)
-        btn:SetScript("OnLeave", function() bg:SetColorTexture(0.72,0.58,0.25,0.12) end)
+        Speaketh_Theme:Register(function(C)
+            local a, t = C.accent, C.btnText
+            bg:SetColorTexture(a[1], a[2], a[3], 0.12)
+            border:SetColorTexture(a[1], a[2], a[3], 0.35)
+            txt:SetTextColor(t[1], t[2], t[3], 1)
+        end)
+        btn:SetScript("OnEnter", function()
+            local a = Speaketh_Theme.C.accent; bg:SetColorTexture(a[1], a[2], a[3], 0.25)
+        end)
+        btn:SetScript("OnLeave", function()
+            local a = Speaketh_Theme.C.accent; bg:SetColorTexture(a[1], a[2], a[3], 0.12)
+        end)
         return btn
     end
 
@@ -327,18 +377,25 @@ function Speaketh_UI:CreateSpeakWindow()
     langBar:SetHeight(18)
 
     local langBarBg = langBar:CreateTexture(nil,"BACKGROUND"); langBarBg:SetAllPoints()
-    langBarBg:SetColorTexture(0, 0, 0, 0.35)
     local langBarBorder = langBar:CreateTexture(nil,"BORDER"); langBarBorder:SetAllPoints()
-    langBarBorder:SetColorTexture(0.72, 0.58, 0.25, 0.20)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent
+        langBarBg:SetColorTexture(0, 0, 0, Speaketh_Theme:IsVoid() and 0.55 or 0.35)
+        langBarBorder:SetColorTexture(a[1], a[2], a[3], 0.20)
+    end)
 
     local langLabel = langBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     langLabel:SetPoint("LEFT", langBar, "LEFT", 8, 0)
     langLabel:SetJustifyH("LEFT")
-    langLabel:SetTextColor(0.92, 0.82, 0.55, 1)
+    Speaketh_Theme:Register(function(C)
+        local t = C.bodyText; langLabel:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     local fluencyLabel = langBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     fluencyLabel:SetPoint("LEFT", langLabel, "RIGHT", 6, 0)
-    fluencyLabel:SetTextColor(0.55, 0.75, 1.0, 1)
+    Speaketh_Theme:Register(function(C)
+        local t = C.infoBlue; fluencyLabel:SetTextColor(t[1], t[2], t[3], 1)
+    end)
 
     self.LangLabel    = langLabel
     self.FluencyLabel = fluencyLabel
@@ -380,19 +437,25 @@ function Speaketh_UI:CreateSpeakWindow()
     -- Section divider (repositioned dynamically)
     local sectionDiv = win:CreateTexture(nil, "ARTWORK")
     sectionDiv:SetHeight(1)
-    sectionDiv:SetColorTexture(0.72, 0.58, 0.25, 0.30)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; sectionDiv:SetColorTexture(a[1], a[2], a[3], 0.30)
+    end)
     self.SectionDiv = sectionDiv
 
     -- ── Dialect section ────────────────────────────────────────
     local dialectHeader = win:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    dialectHeader:SetTextColor(0.72, 0.58, 0.25, 0.80)
     dialectHeader:SetText("DIALECT")
     dialectHeader:SetSpacing(1.5)
+    Speaketh_Theme:Register(function(C)
+        local a = C.accent; dialectHeader:SetTextColor(a[1], a[2], a[3], 0.85)
+    end)
     self.DialectHeader = dialectHeader
 
     local dialectStatusLabel = win:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     dialectStatusLabel:SetPoint("LEFT", dialectHeader, "RIGHT", 10, 0)
-    dialectStatusLabel:SetTextColor(0.85, 0.72, 0.45, 1)
+    Speaketh_Theme:Register(function(C)
+        local t = C.btnText; dialectStatusLabel:SetTextColor(t[1], t[2], t[3], 1)
+    end)
     self.DialectStatusLabel = dialectStatusLabel
 
     local dialectBtn = MakeWinBtn(win, "Dialect")
@@ -495,7 +558,7 @@ function Speaketh_UI:UpdateDialectDisplay()
         self.DialectStatusLabel:SetText("None")
         self.DialectStatusLabel:SetTextColor(0.5, 0.5, 0.5, 1)
     else
-        -- Show "Drunk  ·  Sober" style - no redundant colon prefix
+        -- Show "Drunk  ·  Tipsy" style - no redundant colon prefix
         local label
         if data and data.sliderLabels then
             local level  = Speaketh_Dialects:GetLevel(active)
@@ -797,14 +860,22 @@ function Speaketh_UI:CreateLanguageHUD()
             tile = true, tileSize = 16, edgeSize = 10,
             insets = { left = 3, right = 3, top = 3, bottom = 3 },
         })
-        hud:SetBackdropColor(0.08, 0.08, 0.10, 0.85)
-        hud:SetBackdropBorderColor(0.55, 0.45, 0.20, 1)
+        Speaketh_Theme:Register(function(C)
+            if not hud.SetBackdropColor then return end
+            if Speaketh_Theme:IsVoid() then
+                hud:SetBackdropColor(0.04, 0.02, 0.10, 0.92)
+                local b = C.slateBorder
+                hud:SetBackdropBorderColor(b[1], b[2], b[3], 1)
+            else
+                hud:SetBackdropColor(0.08, 0.08, 0.10, 0.85)
+                hud:SetBackdropBorderColor(0.55, 0.45, 0.20, 1)
+            end
+        end)
     end
 
     -- Language label in the center
     local label = hud:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     label:SetPoint("CENTER", hud, "CENTER", 0, 0)
-    label:SetTextColor(1.0, 0.82, 0.0, 1)  -- gold
     hud.Label = label
 
     -- Drag handlers: save position on drop
@@ -875,7 +946,8 @@ function Speaketh_UI:RefreshLanguageHUD()
     if enabled == false then
         self.LangHUD.Label:SetTextColor(0.55, 0.55, 0.55, 1)  -- greyed out
     else
-        self.LangHUD.Label:SetTextColor(1.0, 0.82, 0.0, 1)    -- gold
+        local t = Speaketh_Theme.C.headerGold
+        self.LangHUD.Label:SetTextColor(t[1], t[2], t[3], 1)
     end
     if lang == "None" then
         self.LangHUD.Label:SetText("None")
