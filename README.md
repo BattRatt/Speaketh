@@ -1,6 +1,6 @@
 # Speaketh
 
-**Version 1.1.0** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
+**Version 1.2.0** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
 
 ---
 
@@ -15,14 +15,26 @@
 ### Dialects
 
 - **Built-in dialects:** Gilnean, Troll, and more, applied on top of any active language
-- **Drunk dialect:** four levels (Off, Tipsy, Drunk, Smashed) that slur and distort your speech
 - **Custom dialects:** build your own accent using word-swap rules
+
+### Speech Effects
+
+- **Independent effects:** Drunk, Stutter, Hiss, Growl, and Lisp operate separately from the active dialect
+- **Adjustable intensity:** every effect has four levels, with conservative Light and Moderate settings for readable roleplay
+- **Drunkenness:** retains its themed Off, Tipsy, Drunk, and Smashed progression
 
 ### Fluency
 
 - **Per-language fluency (0-100%):** the higher your fluency, the more of your speech comes through clearly to other Speaketh users
 - **Passive learning:** optionally gain fluency over time just by hearing a language spoken
 - **Listener-based decoding:** two listeners can hear the same message very differently depending on how well each of them knows the language
+
+### Glyphs
+
+- **Overhead glyph speech:** when enabled, other Speaketh users see your overhead speech bubble drawn as language glyph textures (one per letter) instead of scrambled text. The chat window still shows the message translated according to each listener's fluency, so glyphs convey "this is a foreign tongue" overhead while the chat box handles understanding.
+- **Per-language glyph sets:** every built-in language ships its own A-Z glyph set; custom languages fall back to the Common set.
+- **Non-disruptive:** players without Speaketh never see glyphs, only the normal scrambled text, exactly as before. Chat bubbles are unavailable inside dungeons and raids (a Blizzard restriction), where the normal text shows instead.
+- **Toggle:** turn glyphs on or off in `/sp options` under General.
 
 ### Multiplayer
 
@@ -35,6 +47,13 @@
 - **Passthrough words:** define words that are never translated regardless of language, useful for character names and in-game terms
 - **Minimap button:** access your language and settings at a glance
 - **Floating language HUD:** a small draggable label showing your active language
+
+### Addon Compatibility
+
+- **Modules status page:** shows whether supported addons are installed, loaded, and actively connected
+- **Chattery 0.8.4:** uses LibChatFilter's public pre-send context and a guarded per-chunk adapter
+- **EmoteScribe 1.1.8:** supports its shipped Enscriber Speaketh module and public ownership detection
+- **Developer API:** see `API.md` for the versioned splitter and listener interface
 
 ---
 
@@ -61,6 +80,7 @@
 | `/sp none` | Disable translation |
 | `/sp cycle` | Cycle to your next known language |
 | `/sp dialect <name>` | Set a dialect (e.g. `/sp dialect troll`) |
+| `/sp theme <mode>` | Select the Classic or Void interface theme |
 | `/sp drunk <0-3>` | Set drunkenness level |
 | `/sp share <language>` | Generate an import code for a custom language |
 | `/sp import <code>` | Import a custom language from a code |
@@ -70,7 +90,7 @@
 
 ## Attributions
 
-Speaketh's language word tables are derived from data compiled in the community addons **Tongues** and **ShathYar**. See `LICENSE.txt` for full details.
+Speaketh's language word tables are derived from data compiled in the community addons **Tongues** and **ShathYar**. See `LICENSE` for full details.
 
 World of Warcraft is a registered trademark of Blizzard Entertainment, Inc. Speaketh is an unofficial fan addon and is not affiliated with or endorsed by Blizzard Entertainment.
 
@@ -78,4 +98,4 @@ World of Warcraft is a registered trademark of Blizzard Entertainment, Inc. Spea
 
 ## License
 
-MIT License. See `LICENSE.txt` for full terms.
+MIT License. See `LICENSE` for full terms.

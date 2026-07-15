@@ -1,22 +1,26 @@
 ##==================================
 ## Interface: 120007
 ## Title: Speaketh
-## Notes: Auto-translate chat into WoW racial languages and Shath'Yar. Switch languages via minimap button.
+## Notes: Auto-translate chat into WoW racial languages, Shath'Yar, Seth'rak and more. Switch languages via minimap button.
 ## Author: BattRatt
-## Version: 1.1.0
+## Version: 1.2.0
 ## SavedVariablesPerCharacter: Speaketh_Char
+## OptionalDeps: Chattery, EmoteScribe
 ##==================================
 
 ## IconTexture: Interface\AddOns\Speaketh\Resources\Speaketh32
 ## Category-enUS: Roleplay
 
 
-Speaketh_Theme.lua
-Speaketh_Languages.lua
-Speaketh_Fluency.lua
-Speaketh_Dialects.lua
-Speaketh_Translate.lua
-Speaketh_Share.lua
-Speaketh_UI.lua
-Speaketh_Options.lua
-Speaketh.lua
+Core\Speaketh_Theme.lua
+Core\Speaketh_Languages.lua
+Core\Speaketh_Glyphs.lua
+Core\Speaketh_Fluency.lua
+Core\Speaketh_Dialects.lua
+Core\Speaketh_Translate.lua
+Core\Speaketh_Share.lua
+Core\Speaketh_UI.lua
+Core\Speaketh_Options.lua
+Core\Speaketh.lua
+Core\Speaketh_API.lua
+Modules\Speaketh_Chattery.lua
