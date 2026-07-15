@@ -48,13 +48,6 @@
 - **Minimap button:** access your language and settings at a glance
 - **Floating language HUD:** a small draggable label showing your active language
 
-### Addon Compatibility
-
-- **Modules status page:** shows whether supported addons are installed, loaded, and actively connected
-- **Chattery 0.8.4:** uses LibChatFilter's public pre-send context and a guarded per-chunk adapter
-- **EmoteScribe 1.1.8:** supports its shipped Enscriber Speaketh module and public ownership detection
-- **Developer API:** see `API.md` for the versioned splitter and listener interface
-
 ---
 
 ## Installation
