@@ -57,9 +57,9 @@ and speech effect.
 
 ### `API:GetTagOverhead(chatType)`
 
-Returns the byte count added by Speaketh's visible language tag. Splitters can
-reserve this amount before chunking. Language and effect expansion still need a
-safety margin.
+Returns the byte count added by Speaketh's visible language tag. Speaketh's
+bundled splitter adapters preview the concrete transformed result and subdivide
+only chunks that actually exceed the safe chat limit.
 
 ### `API:TranslateChunk(text, chatType, target)`
 

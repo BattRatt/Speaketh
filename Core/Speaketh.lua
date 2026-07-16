@@ -490,7 +490,8 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
         if not result or result == "" or not result:match("%S") then
             result = originalMsg
         end
-        return RestoreProtectedText(result, actionTokens, oocTokens), nil
+        local restored = RestoreProtectedText(result, actionTokens, oocTokens)
+        return restored, nil, #restored > 250
     end
 
     local langData  = Speaketh_Languages[langKey]
@@ -556,7 +557,8 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
     -- Keep the final guard active even for splitter-provided chunks. Language
     -- and dialect expansion can exceed a splitters' estimate, and WoW drops an
     -- oversized chat message entirely.
-    if #finalMsg > 250 then
+    local exceededLengthLimit = #finalMsg > 250
+    if exceededLengthLimit and not skipLengthGuard then
         -- Split the dialect-processed input into words (preserving separators)
         local words = {}
         local seps  = {}
@@ -618,9 +620,9 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
     end
 
     if isNativeBlizz then
-        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), nil
+        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), nil, exceededLengthLimit
     else
-        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), langKey
+        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), langKey, exceededLengthLimit
     end
 end
 
@@ -673,6 +675,58 @@ local function PopPending(sender, langTag)
         end
     end
     return nil
+end
+
+-- Blizzard invokes a chat message filter once for every chat frame that is
+-- displaying the event. The pending-original queue, however, must advance only
+-- once per actual message. Keep the result of the first frame's pop briefly so
+-- the other frames can render the same decoded text. Tracking which frames have
+-- already used a result also distinguishes two identical consecutive messages:
+-- when the same frame sees the key again, that is a new event and the next FIFO
+-- entry is consumed.
+local _resolvedIncoming = {}
+local _unknownChatFrame = {}
+local RESOLVED_INCOMING_TTL = 1
+
+local function ResolvePendingForChatFrame(frame, event, msg, sender, langTag)
+    local now = GetTime()
+    local key = table.concat({event or "", sender or "", msg or ""}, "\031")
+    local frameKey = frame or _unknownChatFrame
+
+    for cachedKey, cached in pairs(_resolvedIncoming) do
+        if now - cached.time > RESOLVED_INCOMING_TTL then
+            _resolvedIncoming[cachedKey] = nil
+        end
+    end
+
+    local cached = _resolvedIncoming[key]
+    if cached and (not langTag or cached.langKey == langTag) then
+        if not cached.frames[frameKey] then
+            cached.frames[frameKey] = true
+            return cached.original, cached.langKey
+        end
+
+        -- The same frame has received an identical message again. Treat this as
+        -- the next real event instead of replaying the previous FIFO entry.
+        _resolvedIncoming[key] = nil
+    elseif cached then
+        _resolvedIncoming[key] = nil
+    end
+
+    -- An omitted language is useful for a later frame looking up an already
+    -- resolved emote, but is not enough information to pop a new queue entry.
+    if not langTag then return nil end
+
+    local original = PopPending(sender, langTag)
+    if not original then return nil end
+
+    _resolvedIncoming[key] = {
+        original = original,
+        langKey = langTag,
+        time = now,
+        frames = {[frameKey] = true},
+    }
+    return original, langTag
 end
 
 -- Tracks whether our addon prefix has been registered this session.
@@ -987,36 +1041,35 @@ function Speaketh:WouldTranslate(chatType)
     return Speaketh_Fluency:Get(langKey) > 0
 end
 
--- Returns the number of bytes that Speaketh's [Language] tag prefix will add
--- to each translated chunk for chatType (e.g. "[Dwarvish] " = 11 bytes).
--- Returns 0 if no language is active or if no tag is prepended (dialect-only,
--- native Blizzard language). A splitting addon should reduce its chunk size
--- by this amount before splitting so the translated result fits in 255 bytes.
+-- Returns the number of bytes that Speaketh's visible [Language] tag adds to a
+-- translated chunk. Effect expansion is handled by the splitter preview path,
+-- so normal source chunks do not need a worst-case effect reserve.
 function Speaketh:GetTagOverhead(chatType)
     if not self:WouldTranslate(chatType) then return 0 end
 
     local langKey = self:GetLanguage()
-    if langKey == "None" then return 0 end  -- dialect-only: no tag
+    if langKey == "None" then return 0 end
 
     local langData = Speaketh_Languages and Speaketh_Languages[langKey]
     if not langData then return 0 end
 
-    -- Native Blizzard languages don't get the [Tag] prefix -- unless the glyph
-    -- system is overriding native scrambling for this language (see
-    -- BuildTranslatedMsg), in which case Speaketh does prepend the tag.
+    -- Native Blizzard languages do not get a tag unless glyphs make Speaketh
+    -- perform the scrambling itself.
     if langData.blizzard then
         local glyphOverride = Speaketh_Glyphs and Speaketh_Glyphs.IsEnabled
             and Speaketh_Glyphs:IsEnabled()
-            and Speaketh_Glyphs.HasOwnGlyphs and Speaketh_Glyphs:HasOwnGlyphs(langKey)
+            and Speaketh_Glyphs.HasOwnGlyphs
+            and Speaketh_Glyphs:HasOwnGlyphs(langKey)
         if not glyphOverride then
             local numLangs = GetNumLanguages and GetNumLanguages() or 0
             for i = 1, numLangs do
-                if GetLanguageByIndex(i) == langData.blizzard then return 0 end
+                if GetLanguageByIndex(i) == langData.blizzard then
+                    return 0
+                end
             end
         end
     end
 
-    -- "[" + display name + "] " = display name length + 3
     return #self:GetLanguageDisplayName(langKey) + 3
 end
 
@@ -1061,9 +1114,9 @@ function Speaketh:TranslateChunk(msg, chatType, target)
     if quotesOnly then
         translated = ApplyDialectToQuotes(msg, langKey)
     else
-        -- The chunk was pre-sized by the splitter; BuildTranslatedMsg still
-        -- retains its final byte-limit guard for unexpected expansion.
-        translated = BuildTranslatedMsg(msg, langKey, true, PROTECT_ASTERISK_ACTIONS[chatType])
+        -- Keep the final byte-limit guard for integrations that call
+        -- TranslateChunk directly without previewing their source chunk.
+        translated = BuildTranslatedMsg(msg, langKey, false, PROTECT_ASTERISK_ACTIONS[chatType])
     end
     if not translated or translated == "" then return msg end
 
@@ -1307,7 +1360,7 @@ local function Speaketh_ChatFilter(self, event, msg, sender, ...)
     end
 
     -- Look up original from cache (self-messages or addon messages from group)
-    local original = PopPending(sender, langKey)
+    local original = ResolvePendingForChatFrame(self, event, msg, sender, langKey)
     if original then
         if fluency >= 100 then
             return false, "[" .. langTag .. "] " .. original, sender, ...
@@ -1343,25 +1396,33 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
     if not msg or type(msg) ~= "string" then return false end
     if not Speaketh_Languages or not Speaketh_Fluency then return false end
 
-    -- We need a cached original to decode against. Peek without popping first
-    -- so we can check langKey before committing. Grab the first queued entry
-    -- for this sender directly, since the emote filter has no langTag to match on yet.
-    local shortSender = sender and (sender:match("^([^-]+)") or sender) or sender or ""
-    -- For self-emotes, sender may be blank in some WoW builds; fall back to player name.
-    local playerName = UnitName("player") or ""
-    local senderQueue = _pendingOriginals[shortSender]
-                     or _pendingOriginals[sender or ""]
-                     or _pendingOriginals[playerName]
-    if not senderQueue or not senderQueue[1] then return false end
-    local now = GetTime()
-    while senderQueue[1] and now - senderQueue[1].time > 10 do
-        table.remove(senderQueue, 1)
-    end
-    local pending = senderQueue[1]
-    if not pending then return false end
+    -- Nothing to decode unless the emote contains speech.
+    if not msg:find('"', 1, true) then return false end
 
-    local langKey = pending.langKey
-    if not langKey or langKey == "None" then return false end
+    -- Later chat frames can reuse the first frame's resolved original even
+    -- though the FIFO entry has already been consumed.
+    local original, langKey = ResolvePendingForChatFrame(self, event, msg, sender, nil)
+    if not original then
+        -- The first frame still needs to discover the language from the queued
+        -- emote because emotes do not carry a top-level [Language] tag.
+        local shortSender = sender and (sender:match("^([^-]+)") or sender) or sender or ""
+        local playerName = UnitName("player") or ""
+        local senderQueue = _pendingOriginals[shortSender]
+                         or _pendingOriginals[sender or ""]
+                         or _pendingOriginals[playerName]
+        if not senderQueue or not senderQueue[1] then return false end
+        local now = GetTime()
+        while senderQueue[1] and now - senderQueue[1].time > 10 do
+            table.remove(senderQueue, 1)
+        end
+        local pending = senderQueue[1]
+        if not pending then return false end
+
+        langKey = pending.langKey
+        if not langKey or langKey == "None" then return false end
+        original = ResolvePendingForChatFrame(self, event, msg, sender, langKey)
+        if not original then return false end
+    end
 
     local fluency = Speaketh_Fluency:Get(langKey)
     if fluency == 0 then return false end
@@ -1373,16 +1434,6 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
             Speaketh_Fluency:Learn(langKey, 1)
         end
     end
-
-    -- Only proceed if the emote actually contains a quoted span
-    if not msg:find('"', 1, true) then return false end
-
-    -- Pop the original now that we know we'll use it.
-    -- Try shortSender, full sender, and playerName (for self-emote echo).
-    local original = PopPending(shortSender, langKey)
-                  or PopPending(sender, langKey)
-                  or PopPending(playerName, langKey)
-    if not original then return false end
 
     -- Build a list of original quoted spans from the cached original emote
     local origQuotes = {}
@@ -1535,12 +1586,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             Speaketh_Dialects:SeedSubstitutes()
         end
 
-        -- Build confirmation: lets you verify in chat that the smart-dialect
-        -- code actually loaded. If you do NOT see this line after a full
-        -- restart, the old files are still in your AddOns folder.
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cffffcc00[Speaketh]|r Smart dialects active (build SD-7). "
-            .. "If speech still flows oddly, type |cff88ccff/sp resetdialects|r.")
+            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.0)!")
 
         -- Re-register any user-created custom dialects from saved variables
         if Speaketh_Dialects and Speaketh_Dialects.SeedCustomDialects then
@@ -2087,6 +2134,50 @@ end
 
 function Speaketh.Internal:BuildTranslatedMsg(text, langKey, skipLengthGuard, protectActions)
     return BuildTranslatedMsg(text, langKey, skipLengthGuard, protectActions)
+end
+
+-- Side-effect-free splitter preview. The returned text is the exact text a
+-- compatibility module may send, while `oversized` tells it to subdivide the
+-- source before committing the matching original-text payload.
+function Speaketh.Internal:PrepareSplitterChunk(text, chatType)
+    if not text or text == "" then return text, nil, false end
+
+    local langKey = Speaketh:GetLanguage()
+    local dialect = Speaketh_Dialects and Speaketh_Dialects:GetActive()
+    local effect = Speaketh_Dialects and Speaketh_Dialects.GetActiveEffect
+        and Speaketh_Dialects:GetActiveEffect()
+    local quotesOnly = DIALECT_QUOTES_ONLY[chatType]
+
+    if langKey == "None" then
+        if not dialect and not effect then return text, nil, #text > 250 end
+        local translated
+        local oversized
+        if quotesOnly then
+            translated = ApplyDialectToQuotes(text, langKey)
+            oversized = translated and #translated > 250 or false
+        else
+            translated, _, oversized = BuildTranslatedMsg(
+                text, langKey, true, PROTECT_ASTERISK_ACTIONS[chatType])
+        end
+        return (translated and translated ~= "") and translated or text, nil, oversized
+    end
+
+    local translated, outLangKey, oversized
+    if quotesOnly then
+        translated = ApplyDialectToQuotes(text, langKey)
+        outLangKey = langKey
+        oversized = translated and #translated > 250 or false
+    else
+        translated, outLangKey, oversized = BuildTranslatedMsg(
+            text, langKey, true, PROTECT_ASTERISK_ACTIONS[chatType])
+    end
+    return (translated and translated ~= "") and translated or text,
+        outLangKey, oversized
+end
+
+function Speaketh.Internal:CommitSplitterChunk(original, langKey, chatType, target)
+    if not langKey then return end
+    pcall(Speaketh_SendOriginal, original, langKey, chatType, target)
 end
 
 function Speaketh.Internal:BlendMessages(original, translated, fluency, protectActions)

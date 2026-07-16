@@ -2007,8 +2007,7 @@ local function BuildModulesPanel(panel)
     local scribeRow, refreshScribe = AddModuleRow(
         "EmoteScribe",
         function()
-            return Speaketh and Speaketh.IsExternalSplitterOwner
-                and Speaketh:IsExternalSplitterOwner()
+            return Speaketh and Speaketh.EmoteScribeCompatibilityActive == true
         end)
 
     panel.refresh = function()

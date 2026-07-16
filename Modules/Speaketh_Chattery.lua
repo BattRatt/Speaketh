@@ -35,67 +35,6 @@ local function GetWhisperTarget(chatType)
     return nil
 end
 
--- Estimate the largest vocabulary expansion for the active language. Chattery
--- subtracts its own marker/padding overhead after receiving this adjusted
--- limit. The reserve covers Speaketh's language tag and modest dialect growth.
-local function GetExpansionRatio()
-    local langKey = Speaketh and Speaketh.GetLanguage and Speaketh:GetLanguage()
-    if not langKey or langKey == "None" then
-        return 2.0  -- dialect-only speech can still expand substitutions
-    end
-
-    local data = Speaketh_Languages and Speaketh_Languages[langKey]
-    if not data then return 1.25 end
-
-    local ratio = 1.0
-    if type(data.words) == "table" then
-        local randomLongest = 0
-        for sourceLen, entries in pairs(data.words) do
-            if type(sourceLen) == "number" and sourceLen > 0 and type(entries) == "table" then
-                for _, replacement in ipairs(entries) do
-                    if type(replacement) == "string" then
-                        if #replacement > randomLongest then randomLongest = #replacement end
-                        if not data.useRandom then
-                            ratio = math.max(ratio, #replacement / sourceLen)
-                        end
-                    end
-                end
-            end
-        end
-        -- Random languages may select any vocabulary entry for any source word.
-        if data.useRandom and randomLongest > 0 then
-            ratio = math.max(ratio, randomLongest)
-        end
-    end
-
-    if type(data.substitute) == "table" then
-        for original, replacement in pairs(data.substitute) do
-            if type(original) == "string" and #original > 0 and type(replacement) == "string" then
-                ratio = math.max(ratio, #replacement / #original)
-            end
-        end
-    end
-
-    -- Reserve for the active effect. The final byte guard remains authoritative,
-    -- but conservative source chunks keep non-Speaketh readers from losing the
-    -- tail of a chunk when an effect expands it.
-    local effect = Speaketh_Dialects and Speaketh_Dialects.GetActiveEffect
-        and Speaketh_Dialects:GetActiveEffect()
-    local level = effect and Speaketh_Dialects:GetLevel(effect) or 0
-    local effectGrowth = 1.15
-    if effect == "Lisp" then
-        effectGrowth = 2.0
-    elseif effect == "Stutter" then
-        effectGrowth = ({1.20, 1.40, 1.70})[level] or 1.20
-    elseif effect == "Drunk" then
-        effectGrowth = ({1.25, 1.55, 2.00})[level] or 1.25
-    elseif effect == "Hiss" or effect == "Growl" then
-        effectGrowth = ({1.20, 1.35, 1.55})[level] or 1.20
-    end
-
-    return math.max(1.0, ratio * effectGrowth)
-end
-
 local function HasEnscriberOwnership()
     return Speaketh and Speaketh.IsExternalSplitterOwner
        and Speaketh:IsExternalSplitterOwner()
@@ -124,7 +63,12 @@ end
 
 local function InstallCompatibility()
     if installed then return true end
-    if not Speaketh or not Speaketh.WouldTranslate or not Speaketh.TranslateChunk then return false end
+    if not Speaketh or not Speaketh.WouldTranslate or not Speaketh.TranslateChunk
+       or not Speaketh.Internal
+       or type(Speaketh.Internal.PrepareSplitterChunk) ~= "function"
+       or type(Speaketh.Internal.CommitSplitterChunk) ~= "function" then
+        return false
+    end
     if not Chattery or not Chattery.Chunker then return false end
     if type(Chattery.Chunker.SplitMessage) ~= "function" then return false end
     if Chattery.Chunker._SpeakethOriginalSplitMessage then
@@ -143,22 +87,82 @@ local function InstallCompatibility()
             return originalSplit(message, chunkSize, chatType)
         end
 
-        local tagOverhead = Speaketh.GetTagOverhead and Speaketh:GetTagOverhead(chatType) or 0
-        local usable = math.max(24, chunkSize - tagOverhead - 12)
-        local sourceLimit = math.max(8, math.floor(usable / GetExpansionRatio()))
-        local sourceChunks = originalSplit(message, sourceLimit, chatType)
+        local targetLimit = math.max(24, math.min(chunkSize, 250))
         local target = GetWhisperTarget(chatType)
         currentContext = nil
         local translatedChunks = {}
         local translatedAll = true
+        local sourceLimit = targetLimit
+        local finalSources, finalPreviews
 
-        for i, sourceChunk in ipairs(sourceChunks) do
-            local ok, translated = pcall(Speaketh.TranslateChunk, Speaketh, sourceChunk, chatType, target)
-            if ok and translated and translated ~= "" then
-                translatedChunks[i] = translated
+        -- Reflow the complete line whenever a concrete transformation is too
+        -- large. This keeps middle chunks balanced instead of emitting the
+        -- short tail of one independently subdivided source chunk.
+        for attempt = 1, 7 do
+            local sources = originalSplit(message, sourceLimit, chatType)
+            if type(sources) ~= "table" then
+                return originalSplit(message, chunkSize, chatType)
+            end
+
+            local previews = {}
+            local allSafe = true
+            local nextLimit = math.max(24, sourceLimit - 1)
+
+            for _, source in ipairs(sources) do
+                local ok, translated, langKey, oversized = pcall(
+                    Speaketh.Internal.PrepareSplitterChunk,
+                    Speaketh.Internal, source, chatType)
+                local tooLong = not ok or not translated or translated == ""
+                    or oversized or #translated > targetLimit
+
+                if tooLong then
+                    allSafe = false
+                    if ok and translated and translated ~= ""
+                       and #source > 24 then
+                        local fitRatio = targetLimit
+                            / math.max(1, #translated)
+                        local measuredLimit = math.floor(
+                            #source * fitRatio * 0.97)
+                        nextLimit = math.min(nextLimit,
+                            math.max(24, measuredLimit))
+                    end
+                    table.insert(previews, { source = source })
+                else
+                    table.insert(previews, {
+                        source = source,
+                        translated = translated,
+                        langKey = langKey,
+                    })
+                end
+            end
+
+            finalSources = sources
+            finalPreviews = previews
+            if allSafe or sourceLimit <= 24 then break end
+            sourceLimit = math.max(24,
+                math.min(sourceLimit - 1, nextLimit))
+        end
+
+        -- Commit only the final reflow. Earlier previews were measurements and
+        -- must not create extra original-text payloads.
+        for i, source in ipairs(finalSources or {}) do
+            local preview = finalPreviews and finalPreviews[i]
+            if preview and preview.translated then
+                Speaketh.Internal:CommitSplitterChunk(
+                    source, preview.langKey, chatType, target)
+                table.insert(translatedChunks, preview.translated)
             else
-                translatedAll = false
-                translatedChunks[i] = sourceChunk
+                -- Indivisible long words and preview failures retain the core
+                -- guarded fallback so Chattery's queue cannot become blocked.
+                local guardedOK, guarded = pcall(
+                    Speaketh.TranslateChunk,
+                    Speaketh, source, chatType, target)
+                if guardedOK and guarded and guarded ~= "" then
+                    table.insert(translatedChunks, guarded)
+                else
+                    translatedAll = false
+                    table.insert(translatedChunks, source)
+                end
             end
         end
 

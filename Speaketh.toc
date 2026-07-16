@@ -24,3 +24,4 @@ Core\Speaketh_Options.lua
 Core\Speaketh.lua
 Core\Speaketh_API.lua
 Modules\Speaketh_Chattery.lua
+Modules\Speaketh_EmoteScribe.lua

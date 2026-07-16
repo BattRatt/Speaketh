@@ -201,6 +201,7 @@ end
 --                                  channel disabled, lockdown, etc.)
 --                    "unknown-language"
 --                    "not-fluent" fluency is 0; nothing translated
+--                    "too-long" transformed text exceeded the safe chat limit
 --
 -- Does NOT send anything. Does NOT broadcast. Caller is responsible for
 -- calling SendChatMessage (or equivalent) with translatedText, and then
@@ -244,6 +245,7 @@ function API:Translate(text, opts)
     if DIALECT_QUOTES_ONLY[chatType] then
         local final = Speaketh.Internal:ApplyDialectToQuotes(text, langKey)
         if not final or final == "" then return text, nil, "passthrough" end
+        if #final > 250 then return text, nil, "too-long" end
         -- Emote quotes carry their translation inline; caller should still
         -- broadcast language translation so the receiving emote filter can
         -- decode. Dialect-only emotes do not need an addon payload.
@@ -262,36 +264,12 @@ function API:Translate(text, opts)
     end
 
     local protectActions = chatType == "SAY" or chatType == "YELL"
-    local final, tagLangKey = Speaketh.Internal:BuildTranslatedMsg(text, langKey, false, protectActions)
+    local final, tagLangKey, exceededLengthLimit =
+        Speaketh.Internal:BuildTranslatedMsg(text, langKey, false, protectActions)
     if not final or final == "" then
         return text, nil, "passthrough"
     end
-    -- BuildTranslatedMsg silently returns the original text (not the
-    -- translated text, and with tagLangKey = nil) when the translated
-    -- form would exceed WoW's ~255-byte chat limit. We need to surface
-    -- that case to the caller so chat splitters (e.g. EmoteScribe) know
-    -- to shrink their chunk size and retry instead of sending raw.
-    if tagLangKey == nil and langKey ~= "None" and final == text then
-        -- langKey is set and non-None, but BuildTranslatedMsg returned a
-        -- nil tag AND unchanged text. That only happens on the length
-        -- fallback path. (A native Blizzard language also returns nil
-        -- tag, but it returns translated -- not equal to text -- so it
-        -- doesn't match this branch.)
-        -- Double-check we're not in the native-Blizz case:
-        local langData = Speaketh_Languages and Speaketh_Languages[langKey]
-        local isNativeBlizz = false
-        if langData and langData.blizzard and GetNumLanguages then
-            for i = 1, GetNumLanguages() do
-                if GetLanguageByIndex(i) == langData.blizzard then
-                    isNativeBlizz = true
-                    break
-                end
-            end
-        end
-        if not isNativeBlizz then
-            return text, nil, "too-long"
-        end
-    end
+    if exceededLengthLimit then return text, nil, "too-long" end
     return final, tagLangKey, "ok"
 end
 
