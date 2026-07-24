@@ -3,9 +3,9 @@
 ## Title: Speaketh
 ## Notes: Auto-translate chat into WoW racial languages, Shath'Yar, Seth'rak and more. Switch languages via minimap button.
 ## Author: BattRatt
-## Version: 1.2.0
+## Version: 1.2.1
 ## SavedVariablesPerCharacter: Speaketh_Char
-## OptionalDeps: Chattery, EmoteScribe
+## OptionalDeps: Chattery, EmoteScribe, Listener
 ##==================================
 
 ## IconTexture: Interface\AddOns\Speaketh\Resources\Speaketh32
@@ -25,3 +25,4 @@ Core\Speaketh.lua
 Core\Speaketh_API.lua
 Modules\Speaketh_Chattery.lua
 Modules\Speaketh_EmoteScribe.lua
+Modules\Speaketh_Listener.lua

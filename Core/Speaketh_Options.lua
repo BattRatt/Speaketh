@@ -2010,6 +2010,12 @@ local function BuildModulesPanel(panel)
             return Speaketh and Speaketh.EmoteScribeCompatibilityActive == true
         end)
 
+    local listenerRow, refreshListener = AddModuleRow(
+        "Listener",
+        function()
+            return Speaketh and Speaketh.ListenerCompatibilityActive == true
+        end)
+
     panel.refresh = function()
         local function PositionRow(row, anchor)
             row:ClearAllPoints()
@@ -2028,6 +2034,10 @@ local function BuildModulesPanel(panel)
         end
         if refreshScribe() then
             PositionRow(scribeRow, anchor)
+            anchor = scribeRow
+        end
+        if refreshListener() then
+            PositionRow(listenerRow, anchor)
         end
     end
     panel.refresh()

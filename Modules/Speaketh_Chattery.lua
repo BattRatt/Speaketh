@@ -40,6 +40,15 @@ local function HasEnscriberOwnership()
        and Speaketh:IsExternalSplitterOwner()
 end
 
+local function NormalizeChatType(chatType)
+    return tostring(chatType or "SAY"):upper()
+end
+
+local function SpeakethOwnsLanguageLabel(chatType)
+    return Speaketh and type(Speaketh.GetTagOverhead) == "function"
+       and Speaketh:GetTagOverhead(NormalizeChatType(chatType)) > 0
+end
+
 local function RegisterContextMutator()
     if contextMutatorRegistered then return true end
     if not LibStub or type(LibStub.GetLibrary) ~= "function" then return false end
@@ -47,8 +56,26 @@ local function RegisterContextMutator()
     if not lib or type(lib.RegisterTransform) ~= "function" then return false end
 
     local ok = lib.RegisterTransform(function(message, context)
+        local normalizedType = context
+            and NormalizeChatType(context.chatType) or nil
         if installed and context and not HasEnscriberOwnership()
-           and Speaketh:WouldTranslate(context.chatType) then
+           and Speaketh:WouldTranslate(normalizedType) then
+            -- Chattery carries the edit box's explicit Blizzard-language
+            -- metadata into every split send. Speaketh's translated chunks
+            -- already contain their own visible [Language] label, so retaining
+            -- that metadata lets Prat/WoW render two labels:
+            --     [Common] [Valesh] ...
+            --
+            -- Match EmoteScribe's effective ownership boundary: when Speaketh
+            -- owns the visible label, let the send fall back to the normal
+            -- faction language instead of forwarding an explicit second one.
+            -- Native Blizzard-language sends without a Speaketh label retain
+            -- Chattery's original metadata.
+            if SpeakethOwnsLanguageLabel(normalizedType) then
+                context.language = nil
+                context.languageID = nil
+                context.arg3 = nil
+            end
             currentContext = context
             C_Timer.After(0, function()
                 currentContext = nil
@@ -83,12 +110,14 @@ local function InstallCompatibility()
 
     chunker.SplitMessage = function(message, chunkSize, chatType)
         chunkSize = chunkSize or 255
-        if HasEnscriberOwnership() or not Speaketh:WouldTranslate(chatType) then
+        local normalizedType = NormalizeChatType(chatType)
+        if HasEnscriberOwnership()
+           or not Speaketh:WouldTranslate(normalizedType) then
             return originalSplit(message, chunkSize, chatType)
         end
 
         local targetLimit = math.max(24, math.min(chunkSize, 250))
-        local target = GetWhisperTarget(chatType)
+        local target = GetWhisperTarget(normalizedType)
         currentContext = nil
         local translatedChunks = {}
         local translatedAll = true
@@ -111,7 +140,7 @@ local function InstallCompatibility()
             for _, source in ipairs(sources) do
                 local ok, translated, langKey, oversized = pcall(
                     Speaketh.Internal.PrepareSplitterChunk,
-                    Speaketh.Internal, source, chatType)
+                    Speaketh.Internal, source, normalizedType)
                 local tooLong = not ok or not translated or translated == ""
                     or oversized or #translated > targetLimit
 
@@ -149,14 +178,14 @@ local function InstallCompatibility()
             local preview = finalPreviews and finalPreviews[i]
             if preview and preview.translated then
                 Speaketh.Internal:CommitSplitterChunk(
-                    source, preview.langKey, chatType, target)
+                    source, preview.langKey, normalizedType, target)
                 table.insert(translatedChunks, preview.translated)
             else
                 -- Indivisible long words and preview failures retain the core
                 -- guarded fallback so Chattery's queue cannot become blocked.
                 local guardedOK, guarded = pcall(
                     Speaketh.TranslateChunk,
-                    Speaketh, source, chatType, target)
+                    Speaketh, source, normalizedType, target)
                 if guardedOK and guarded and guarded ~= "" then
                     table.insert(translatedChunks, guarded)
                 else

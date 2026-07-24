@@ -102,6 +102,14 @@ function Speaketh:IsExternalSplitterOwner()
        and type(self.TranslateChunk) == "function"
 end
 
+-- Returns true when an installed splitter adapter exclusively owns outgoing
+-- translation. EmoteScribe advertises ownership through Enscriber; Chattery's
+-- bundled adapter marks itself only after its chunk hook is installed.
+function Speaketh:ShouldDeferOutgoingToSplitter()
+    return self:IsExternalSplitterOwner()
+        or self.ChatteryCompatibilityActive == true
+end
+
 -- ============================================================
 -- OOC (out-of-character) bracket protection
 -- ============================================================
@@ -655,6 +663,75 @@ local function PeekPending(name, langTag)
     return nil
 end
 
+-- Keep a brief non-destructive copy after the built-in chat filter consumes a
+-- pending original. Listener invokes chat filters once for every displayed
+-- chat frame, but reuses its own synthetic frame for those passes. Without
+-- this small cache, its first pass can store the readable message while a
+-- later pass stores the now-unresolvable garbled variant as a second entry.
+local _recentResolvedOriginals = {}
+local RECENT_RESOLVED_TTL = 2
+
+local function ResolvedOriginalKey(name, langTag)
+    return (name or "") .. "\031" .. (langTag or "")
+end
+
+local function RememberResolvedOriginal(sender, langTag, original)
+    if not sender or sender == "" or not langTag or not original then return end
+    local now = GetTime()
+    local shortName = sender:match("^([^-]+)") or sender
+    local seen = {}
+
+    for _, name in ipairs({shortName, sender}) do
+        if name ~= "" and not seen[name] then
+            seen[name] = true
+            _recentResolvedOriginals[ResolvedOriginalKey(name, langTag)] = {
+                original = original,
+                time = now,
+            }
+        end
+    end
+end
+
+local function PeekRecentResolvedOriginal(sender, langTag)
+    local now = GetTime()
+    local shortName = sender and (sender:match("^([^-]+)") or sender) or ""
+    local seen = {}
+
+    for _, name in ipairs({shortName, sender or ""}) do
+        if name ~= "" and not seen[name] then
+            seen[name] = true
+            local key = ResolvedOriginalKey(name, langTag)
+            local entry = _recentResolvedOriginals[key]
+            if entry then
+                if now - entry.time <= RECENT_RESOLVED_TTL then
+                    return entry
+                end
+                _recentResolvedOriginals[key] = nil
+            end
+        end
+    end
+    return nil
+end
+
+-- Non-destructive counterpart to PopPending. Chat events may identify the
+-- sender as either "Name" or "Name-Realm", while self-sent originals are
+-- cached under UnitName("player"). Listener-style consumers must try the same
+-- aliases as the built-in chat filter or their copy can remain garbled even
+-- while Speaketh's normal chat window successfully decodes it.
+local function PeekPendingForSender(sender, langTag)
+    local shortName = sender and (sender:match("^([^-]+)") or sender) or ""
+    local seen = {}
+
+    for _, name in ipairs({shortName, sender or ""}) do
+        if name ~= "" and not seen[name] then
+            seen[name] = true
+            local entry = PeekPending(name, langTag)
+            if entry then return entry end
+        end
+    end
+    return PeekRecentResolvedOriginal(sender, langTag)
+end
+
 -- Pop (remove and return) the oldest matching cache entry for a sender.
 local function PopPending(sender, langTag)
     local now = GetTime()
@@ -719,6 +796,7 @@ local function ResolvePendingForChatFrame(frame, event, msg, sender, langTag)
 
     local original = PopPending(sender, langTag)
     if not original then return nil end
+    RememberResolvedOriginal(sender, langTag, original)
 
     _resolvedIncoming[key] = {
         original = original,
@@ -862,13 +940,12 @@ local function Speaketh_ProcessOutgoing(editBox)
     -- A chat-splitting addon has already handled translation for this send.
     if Speaketh.splitterBypassing then return end
 
-    -- An Enscriber-based splitter (e.g. EmoteScribe) owns the outgoing send and
-    -- translates each chunk via TranslateChunk. Its editbox callback and ours
-    -- both fire on ChatFrame.OnEditBoxPreSendText with no guaranteed dispatch
-    -- order, so the per-send splitterBypassing flag above may not be set yet
-    -- when we run. Stand down whenever such a splitter is loaded so we never do
-    -- a premature translate + broadcast that the splitter would then double.
-    if Speaketh:IsExternalSplitterOwner() then
+    -- A compatible splitter owns the outgoing send and translates each final
+    -- chunk. Callback order is not guaranteed, so defer based on installed
+    -- ownership rather than waiting for a per-send flag. This gives Chattery
+    -- the same single-owner behavior as EmoteScribe and prevents premature
+    -- translation, duplicate cache broadcasts, and duplicate language tags.
+    if Speaketh:ShouldDeferOutgoingToSplitter() then
         return
     end
 
@@ -1587,7 +1664,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.0)!")
+            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.1)!")
 
         -- Re-register any user-created custom dialects from saved variables
         if Speaketh_Dialects and Speaketh_Dialects.SeedCustomDialects then
@@ -2185,6 +2262,6 @@ function Speaketh.Internal:BlendMessages(original, translated, fluency, protectA
 end
 
 function Speaketh.Internal:PeekPending(sender, langKey)
-    local entry = PeekPending(sender, langKey)
+    local entry = PeekPendingForSender(sender, langKey)
     return entry and entry.original or nil
 end

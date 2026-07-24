@@ -1,6 +1,6 @@
 # Speaketh Addon API
 
-Speaketh 1.2.0 exposes a versioned API for chat splitters, listeners, and roleplay
+Speaketh 1.2.1 exposes a versioned API for chat splitters, listeners, and roleplay
 tools. Check `Speaketh.API.VERSION` before using it. Version 1 is additive: new
 methods may be added without changing the version, while incompatible signature
 changes require a version bump.
@@ -42,6 +42,9 @@ end
 
 For an edit-box callback, keep bypassing enabled until the current callback
 chain has completed, usually by clearing it with `C_Timer.After(0, ...)`.
+Speaketh's bundled Chattery and EmoteScribe adapters additionally advertise
+exclusive ownership, allowing the core edit-box hook to stand down regardless
+of callback order.
 
 ### `API:SetSplitterBypassing(active)`
 
@@ -87,7 +90,7 @@ automatically and preserves FIFO ordering.
 
 ## Listener helpers
 
-### `API:Decode(sender, message, languageTag)`
+### `API:Decode(sender, message, languageTag, chatEvent)`
 
 Returns a non-destructive decoded view when a matching original is currently in
 Speaketh's short-lived cache:
@@ -97,6 +100,9 @@ decodedText, languageKey, fluency, originalText
 ```
 
 It does not consume the cache entry used by Speaketh's own chat filter.
+`languageTag` and `chatEvent` are optional. Supplying the event lets partial
+fluency preserve `/say` and `/yell` action spans exactly as Speaketh's chat
+window does.
 
 ### Introspection
 

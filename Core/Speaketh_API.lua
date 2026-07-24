@@ -320,7 +320,7 @@ end
 -- Returns nil if Speaketh has no cached original for this sender
 -- (message came from a non-Speaketh user, or the cache expired, or the
 -- sender is simply not sending through Speaketh right now).
-function API:Decode(sender, msg, langTag)
+function API:Decode(sender, msg, langTag, chatEvent)
     if type(msg) ~= "string" or msg == "" then return nil end
     if not sender or sender == "" then return nil end
     if not Speaketh_Languages or not Speaketh_Fluency then return nil end
@@ -335,9 +335,10 @@ function API:Decode(sender, msg, langTag)
     local langKey = resolveLangKey(langTag)
     if not langKey or langKey == "None" then return nil end
 
-    -- Non-destructive peek into the pending cache. We intentionally use
-    -- the Internal peek path (same algorithm as PopPending, without the
-    -- removal) so the built-in chat filter still finds the entry.
+    -- Non-destructive peek into the pending cache. The Internal path tries
+    -- both "Name" and "Name-Realm", without removing the entry, so Listener
+    -- can use the full CHAT_MSG sender while the built-in chat filter still
+    -- finds its own copy.
     if not Speaketh.Internal or not Speaketh.Internal.PeekPending then
         return nil
     end
@@ -349,7 +350,12 @@ function API:Decode(sender, msg, langTag)
     if fluency >= 100 then
         decoded = original
     elseif fluency > 0 then
-        decoded = Speaketh.Internal:BlendMessages(original, body, fluency)
+        local protectActions = chatEvent == "CHAT_MSG_SAY"
+            or chatEvent == "CHAT_MSG_YELL"
+            or chatEvent == "SAY"
+            or chatEvent == "YELL"
+        decoded = Speaketh.Internal:BlendMessages(
+            original, body, fluency, protectActions)
     else
         decoded = body
     end
