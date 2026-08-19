@@ -61,17 +61,34 @@ local function RegisterContextMutator()
         if installed and context and not HasEnscriberOwnership()
            and Speaketh:WouldTranslate(normalizedType) then
             -- Chattery carries the edit box's explicit Blizzard-language
-            -- metadata into every split send. Speaketh's translated chunks
-            -- already contain their own visible [Language] label, so retaining
-            -- that metadata lets Prat/WoW render two labels:
+            -- metadata into every split send. Speaketh owns the scrambling and
+            -- visible label for every selected language, so all translated
+            -- chunks use the faction default to avoid a second Blizzard
+            -- scrambling pass and duplicate labels such as:
             --     [Common] [Valesh] ...
             --
-            -- Match EmoteScribe's effective ownership boundary: when Speaketh
-            -- owns the visible label, let the send fall back to the normal
-            -- faction language instead of forwarding an explicit second one.
-            -- Native Blizzard-language sends without a Speaketh label retain
-            -- Chattery's original metadata.
-            if SpeakethOwnsLanguageLabel(normalizedType) then
+            -- Match EmoteScribe's effective ownership boundary: Speaketh-tagged
+            -- sends always use the faction-default language ID.
+            if type(Speaketh.GetOutgoingGameLanguage) == "function" then
+                local languageName, languageID = Speaketh:GetOutgoingGameLanguage()
+                -- LibChatFilter's `language` field is the numeric third
+                -- argument passed to C_ChatInfo.SendChatMessage.
+                context.language = languageID
+                context.languageID = languageID
+                context.arg3 = languageID
+                -- Chattery queues chunks two and onward from context.language,
+                -- but its first chunk continues through Blizzard's active edit
+                -- box. Update both so the complete line uses the same transport.
+                local editBox = context.editBox
+                if editBox and languageID then
+                    if type(editBox.SetGameLanguage) == "function" then
+                        editBox:SetGameLanguage(languageName, languageID)
+                    else
+                        editBox.language = languageName
+                        editBox.languageID = languageID
+                    end
+                end
+            elseif SpeakethOwnsLanguageLabel(normalizedType) then
                 context.language = nil
                 context.languageID = nil
                 context.arg3 = nil

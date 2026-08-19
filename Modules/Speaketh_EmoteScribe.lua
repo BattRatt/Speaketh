@@ -52,6 +52,14 @@ local function InstallCompatibility()
             return originalAddChat(msg, chatType, arg3, target)
         end
 
+        -- Enscriber owns the eventual SendChatMessage call, so force Speaketh's
+        -- faction-default transport language. Speaketh retains the visible tag,
+        -- scrambling, and fluency behavior for racial/faction languages too.
+        if type(Speaketh.GetOutgoingGameLanguage) == "function" then
+            local _, outgoingLanguageID = Speaketh:GetOutgoingGameLanguage()
+            arg3 = outgoingLanguageID
+        end
+
         local originalSplit = internal.SplitMessage
         local originalTranslateChunk = Speaketh.TranslateChunk
         local prepared = {}

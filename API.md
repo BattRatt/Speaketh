@@ -1,6 +1,6 @@
 # Speaketh Addon API
 
-Speaketh 1.2.1 exposes a versioned API for chat splitters, listeners, and roleplay
+Speaketh 1.2.2 exposes a versioned API for chat splitters, listeners, and roleplay
 tools. Check `Speaketh.API.VERSION` before using it. Version 1 is additive: new
 methods may be added without changing the version, while incompatible signature
 changes require a version bump.

@@ -459,13 +459,13 @@ function Speaketh_SStrHash(word)
 end
 
 -- ============================================================
--- SETH'RAK  (Sethrak - serpentine, hissing tongue of Vol'dun)
+-- SETHRAK  (serpentine, hissing tongue of Vol'dun)
 -- No Blizzard word-hash exists for Sethrak; this table is built from
 -- lore terms (Sethraliss, Vorrik, Korthek, Sulthis, Mythrax, Vol'dun,
 -- Atul'Aman, Zul'Ahjin) plus a heavy sibilant/hiss aesthetic so speech
 -- reads like "hisss.. sska.. hsss..". Uses the standard length buckets.
 -- ============================================================
-Speaketh_Languages["Seth'rak"] = {
+Speaketh_Languages["Sethrak"] = {
     blizzard = nil, race = {"Sethrak"}, faction = nil,
     words = {
         [1]  = {"s","z","h","x","k","t"},
@@ -697,7 +697,7 @@ Speaketh_LanguageOrder = {
     "Shalassian","Draconic","Demonic","Nerubian","Nazja","Vulpera","Vrykul",
     "Gilnean","Shath'Yar",
     -- New lore languages
-    "Seth'rak","Furbolg","Tuskarr","Mogu","Ogre","Hozen","Mantid",
+    "Sethrak","Furbolg","Tuskarr","Mogu","Ogre","Hozen","Mantid",
     "Kalimag","Ravenspeech",
 }
 

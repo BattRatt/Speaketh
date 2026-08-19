@@ -457,6 +457,19 @@ local function ApplyDialectToQuotes(text, langKey)
     return RestoreOOC(table.concat(result), oocTokens)
 end
 
+-- Returns the game-language metadata that must accompany the active Speaketh
+-- language. Every Speaketh language, including a character's own racial and
+-- faction languages, is sent over the faction default. Speaketh must retain
+-- ownership of the visible [Language] tag and scrambling so its incoming chat
+-- filter can apply fluency consistently instead of WoW bypassing that path.
+function Speaketh:GetOutgoingGameLanguage()
+    local languageName, languageID
+    if GetDefaultLanguage then
+        languageName, languageID = GetDefaultLanguage()
+    end
+    return languageName, languageID, false
+end
+
 -- Translates msg in langKey, prepending a [Language] tag when needed.
 -- Returns CLEAN translated string - no payload.
 -- If langKey is "None", only dialect transformations are applied.
@@ -502,33 +515,11 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
         return restored, nil, #restored > 250
     end
 
-    local langData  = Speaketh_Languages[langKey]
-
+    -- Speaketh always owns language scrambling and the visible tag—even when
+    -- the player can speak the equivalent Blizzard language natively. Routing
+    -- through WoW's native language would remove our tag and prevent the
+    -- incoming filter from restoring/blending the original by listener fluency.
     local isNativeBlizz = false
-    if langData and langData.blizzard then
-        local numLangs = GetNumLanguages()
-        for i = 1, numLangs do
-            if GetLanguageByIndex(i) == langData.blizzard then
-                isNativeBlizz = true
-                break
-            end
-        end
-    end
-
-    -- Glyph override: for a language that has its own glyph set, the overhead
-    -- speech bubble must show Speaketh-controlled scrambled text (so the glyph
-    -- driver can match and replace it). WoW's native scrambling for a Blizzard
-    -- language (e.g. Orcish on a Horde character) is computed client-side and
-    -- Speaketh never sees that string, so a native message can't be matched or
-    -- decorated. When the glyph system is on and this language ships glyphs,
-    -- treat it as non-native: Speaketh tags and scrambles it itself, exactly
-    -- like the non-Blizzard languages, which makes the bubble glyphs work.
-    if isNativeBlizz and Speaketh_Glyphs and Speaketh_Glyphs.IsEnabled
-       and Speaketh_Glyphs:IsEnabled()
-       and Speaketh_Glyphs.HasOwnGlyphs and Speaketh_Glyphs:HasOwnGlyphs(langKey) then
-        isNativeBlizz = false
-    end
-
     local translated = Speaketh_Translate:Message(msg, langKey)
     if Speaketh_Dialects and Speaketh_Dialects.ApplyEffectWords then
         translated = Speaketh_Dialects:ApplyEffectWords(translated, langKey)
@@ -998,6 +989,20 @@ local function Speaketh_ProcessOutgoing(editBox)
 
     if Speaketh_Fluency:Get(langKey) == 0 then return end
 
+    -- Speaketh owns the language tag and scrambling for every selected language.
+    -- Force the faction default here so WoW does not consume racial/faction
+    -- languages through its native path and bypass Speaketh's fluency decoder.
+    local gameLanguage, gameLanguageID = Speaketh:GetOutgoingGameLanguage()
+    if gameLanguageID then
+        if type(editBox.SetGameLanguage) == "function" then
+            editBox:SetGameLanguage(gameLanguage, gameLanguageID)
+        else
+            -- Compatibility fallback for older chat edit-box implementations.
+            editBox.language = gameLanguage
+            editBox.languageID = gameLanguageID
+        end
+    end
+
     -- Emote with language: only translate quoted portions
     if quotesOnly then
         -- Broadcast the original emote text so other Speaketh users can
@@ -1130,23 +1135,8 @@ function Speaketh:GetTagOverhead(chatType)
     local langData = Speaketh_Languages and Speaketh_Languages[langKey]
     if not langData then return 0 end
 
-    -- Native Blizzard languages do not get a tag unless glyphs make Speaketh
-    -- perform the scrambling itself.
-    if langData.blizzard then
-        local glyphOverride = Speaketh_Glyphs and Speaketh_Glyphs.IsEnabled
-            and Speaketh_Glyphs:IsEnabled()
-            and Speaketh_Glyphs.HasOwnGlyphs
-            and Speaketh_Glyphs:HasOwnGlyphs(langKey)
-        if not glyphOverride then
-            local numLangs = GetNumLanguages and GetNumLanguages() or 0
-            for i = 1, numLangs do
-                if GetLanguageByIndex(i) == langData.blizzard then
-                    return 0
-                end
-            end
-        end
-    end
-
+    -- Every Speaketh language owns a visible [Language] tag, including the
+    -- player's racial and faction languages.
     return #self:GetLanguageDisplayName(langKey) + 3
 end
 
@@ -1618,6 +1608,18 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
 
+        -- v1.2.2: correct the Sethrak key without discarding an existing
+        -- character's selected language or learned fluency.
+        if Speaketh_Char.language == "Seth'rak" then
+            Speaketh_Char.language = "Sethrak"
+        end
+        if Speaketh_Char.fluency and Speaketh_Char.fluency["Seth'rak"] ~= nil then
+            if Speaketh_Char.fluency["Sethrak"] == nil then
+                Speaketh_Char.fluency["Sethrak"] = Speaketh_Char.fluency["Seth'rak"]
+            end
+            Speaketh_Char.fluency["Seth'rak"] = nil
+        end
+
         -- Migrate legacy Drunk dialect state into the independent Effects state.
         if Speaketh_Char.drunkLevel and Speaketh_Char.drunkLevel > 0 then
             if not Speaketh_Char.effectLevels then
@@ -1664,7 +1666,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.1)!")
+            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.2)!")
 
         -- Re-register any user-created custom dialects from saved variables
         if Speaketh_Dialects and Speaketh_Dialects.SeedCustomDialects then

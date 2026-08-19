@@ -37,7 +37,7 @@ local SHIPPED = {
     Common=true, Orcish=true, Furbolg=true, Pandaren=true,
     ["Shath'Yar"]=true, Taurahe=true, Vulpera=true, Zandali=true,
     Demonic=true, Thalassian=true, Darnassian=true,
-    Draenei=true, Vrykul=true, ["Seth'rak"]=true, Dwarvish=true,
+    Draenei=true, Vrykul=true, Sethrak=true, Dwarvish=true,
 }
 
 -- True only when a language ships a dedicated glyph folder. Used to decide
