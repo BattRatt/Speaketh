@@ -108,10 +108,12 @@ local CHAN_KEY = {
     PARTY          = "chanParty",
     PARTY_LEADER   = "chanParty",
     RAID           = "chanRaid",
+    RAID_LEADER    = "chanRaid",
     RAID_WARNING   = "chanRaid",
     GUILD          = "chanGuild",
     OFFICER        = "chanOfficer",
     INSTANCE_CHAT  = "chanInstance",
+    INSTANCE_CHAT_LEADER = "chanInstance",
     WHISPER        = "chanWhisper",
     EMOTE          = "chanEmote",
 }
@@ -214,6 +216,12 @@ function API:Translate(text, opts)
 
     local chatType = opts.chatType or "SAY"
 
+    -- Respect the global on/off toggle (HUD middle-click). Without this a
+    -- splitter using API:Translate kept translating while Speaketh was off.
+    if Speaketh and Speaketh.IsEnabled and not Speaketh:IsEnabled() then
+        return text, nil, "passthrough"
+    end
+
     -- Respect user's per-channel toggle unless caller explicitly overrides.
     if not opts.ignoreChannelToggle and not channelEnabled(chatType) then
         return text, nil, "passthrough"
@@ -240,6 +248,13 @@ function API:Translate(text, opts)
         end
     end
 
+    -- Language-safe effects (Stutter) shape the original speech. The same
+    -- result is reused when the caller later passes this text to
+    -- API:BroadcastOriginal.
+    if langKey ~= "None" and Speaketh.Internal.ApplyOriginalSpeechEffects then
+        text = Speaketh.Internal:ApplyOriginalSpeechEffects(text, chatType, langKey)
+    end
+
     -- Emotes always use the quotes-only path, including dialect-only speech.
     local DIALECT_QUOTES_ONLY = { EMOTE = true }
     if DIALECT_QUOTES_ONLY[chatType] then
@@ -263,7 +278,7 @@ function API:Translate(text, opts)
         end
     end
 
-    local protectActions = chatType == "SAY" or chatType == "YELL"
+    local protectActions = true
     local final, tagLangKey, exceededLengthLimit =
         Speaketh.Internal:BuildTranslatedMsg(text, langKey, false, protectActions)
     if not final or final == "" then
@@ -350,10 +365,7 @@ function API:Decode(sender, msg, langTag, chatEvent)
     if fluency >= 100 then
         decoded = original
     elseif fluency > 0 then
-        local protectActions = chatEvent == "CHAT_MSG_SAY"
-            or chatEvent == "CHAT_MSG_YELL"
-            or chatEvent == "SAY"
-            or chatEvent == "YELL"
+        local protectActions = true
         decoded = Speaketh.Internal:BlendMessages(
             original, body, fluency, protectActions)
     else

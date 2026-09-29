@@ -115,6 +115,11 @@ Speaketh_Theme.C = {}
 
 -- Registry of re-skin closures.
 local _appliers = {}
+-- Seasonal palette inherits every compatibility token from Classic.
+PALETTES.HallowsEnd={}
+for k,v in pairs(PALETTES.Classic)do PALETTES.HallowsEnd[k]=v end
+for k,v in pairs({accent={1,.52,.16,1},title={1,.65,.28,1},headerGold={1,.60,.22,1},bodyText={.95,.90,.80,1},btnText={.92,.82,.67,1},slateBg={.065,.047,.067,.98},slateBorder={.43,.29,.19,1},backdropBg={.10,.073,.09,.98},backdropBorder={.43,.29,.19,1}})do PALETTES.HallowsEnd[k]=v end
+
 local _currentName = "Classic"
 
 -- Repopulate the live token table from the chosen palette.
@@ -162,8 +167,16 @@ function Speaketh_Theme:Reapply()
 end
 
 -- Switch theme. Persists to Speaketh_Char.theme and re-skins live.
+function Speaketh_Theme:IsAvailable(name)
+    if name~="HallowsEnd" then return PALETTES[name]~=nil end
+    local calendar=date("*t")
+    return calendar and calendar.month==10
+end
+function Speaketh_Theme:CheckSeason()
+    if _currentName=="HallowsEnd" and not self:IsAvailable(_currentName)then self:Set("Classic")end
+end
 function Speaketh_Theme:Set(name)
-    if not PALETTES[name] then name = "Classic" end
+    if not self:IsAvailable(name) then name = "Classic" end
     _currentName = name
     CopyPalette(name)
     if Speaketh_Char then
@@ -176,142 +189,20 @@ end
 -- Speaketh_Char exists. Safe to call before any frames are built.
 function Speaketh_Theme:Init()
     local saved = (Speaketh_Char and Speaketh_Char.theme) or "Classic"
-    if not PALETTES[saved] then saved = "Classic" end
+    if not self:IsAvailable(saved) then saved = "Classic";if Speaketh_Char then Speaketh_Char.theme=saved end end
     _currentName = saved
     CopyPalette(saved)
 end
 
 -- Convenience: list of selectable themes (for the options dropdown).
 function Speaketh_Theme:List()
-    return { "Classic", "Void" }
+    self:CheckSeason();local names={"Classic","Void"};if self:IsAvailable("HallowsEnd")then names[#names+1]="HallowsEnd"end;return names
 end
 
--- ------------------------------------------------------------
--- Decoration helpers (Void-only visual flourishes)
---
--- These attach extra textures to a frame that are only shown in
--- the Void theme: an inner vignette, top/bottom ink-bleed
--- gradients, four corner runes, and a slow border-glow pulse.
--- Each helper registers its own applier so it toggles live.
--- ------------------------------------------------------------
-
--- Inner radial-ish vignette: darkens the panel edges. WoW textures
--- can't do true radial gradients cheaply, so we approximate with a
--- dark tinted full-panel texture that only shows in Void.
-function Speaketh_Theme:AddVoidVignette(frame)
-    local vig = frame:CreateTexture(nil, "BACKGROUND", nil, 3)
-    vig:SetAllPoints(frame)
-    vig:SetColorTexture(0.02, 0.01, 0.05, 0.55)
-    self:Register(function()
-        if Speaketh_Theme:IsVoid() then vig:Show() else vig:Hide() end
-    end)
-    return vig
-end
-
--- Top + bottom ink-bleed gradient bars (simulate SetGradient VERTICAL).
-function Speaketh_Theme:AddVoidInkBleed(frame)
-    local top = frame:CreateTexture(nil, "BACKGROUND", nil, 4)
-    top:SetPoint("TOPLEFT",  frame, "TOPLEFT",  6, -6)
-    top:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, -6)
-    top:SetHeight(46)
-    top:SetColorTexture(1, 1, 1, 1)
-    if top.SetGradient then
-        top:SetGradient("VERTICAL",
-            CreateColor(0.10, 0.02, 0.18, 0.00),
-            CreateColor(0.35, 0.08, 0.62, 0.22))
-    end
-
-    local bot = frame:CreateTexture(nil, "BACKGROUND", nil, 4)
-    bot:SetPoint("BOTTOMLEFT",  frame, "BOTTOMLEFT",  6, 6)
-    bot:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 6)
-    bot:SetHeight(36)
-    bot:SetColorTexture(1, 1, 1, 1)
-    if bot.SetGradient then
-        bot:SetGradient("VERTICAL",
-            CreateColor(0.20, 0.04, 0.40, 0.24),
-            CreateColor(0.10, 0.02, 0.20, 0.00))
-    end
-
-    self:Register(function()
-        if Speaketh_Theme:IsVoid() then top:Show(); bot:Show()
-        else top:Hide(); bot:Hide() end
-    end)
-    return top, bot
-end
-
--- Four corner rune glyphs (simple arcane circle + cross), Void only.
-function Speaketh_Theme:AddVoidRunes(frame, inset, size)
-    inset = inset or 8
-    size  = size or 22
-    local runes = {}
-    local corners = {
-        { "TOPLEFT",     inset,  -inset },
-        { "TOPRIGHT",    -inset, -inset },
-        { "BOTTOMLEFT",  inset,   inset },
-        { "BOTTOMRIGHT", -inset,  inset },
-    }
-    for _, c in ipairs(corners) do
-        -- Use a soft glow texture as a stand-in rune; tint purple.
-        local t = frame:CreateTexture(nil, "OVERLAY", nil, 1)
-        t:SetSize(size, size)
-        t:SetPoint("CENTER", frame, c[1], c[2], c[3])
-        t:SetTexture("Interface\\Common\\StreamCircle")
-        t:SetVertexColor(0.66, 0.33, 0.97, 0.30)
-        t:SetBlendMode("ADD")
-        table.insert(runes, t)
-    end
-
-    -- Slow breathing pulse on rune alpha.
-    local driver = frame.__voidRuneDriver
-    if not driver then
-        driver = CreateFrame("Frame", nil, frame)
-        frame.__voidRuneDriver = driver
-        driver._t = 0
-    end
-    driver:SetScript("OnUpdate", function(self, elapsed)
-        if not Speaketh_Theme:IsVoid() then return end
-        self._t = (self._t or 0) + elapsed
-        local a = 0.18 + math.sin(self._t * 1.6) * 0.12
-        for _, r in ipairs(runes) do
-            r:SetAlpha(a)
-        end
-    end)
-
-    self:Register(function()
-        local v = Speaketh_Theme:IsVoid()
-        for _, r in ipairs(runes) do
-            if v then r:Show() else r:Hide() end
-        end
-    end)
-    return runes
-end
-
--- Slow border-glow pulse: drives a thin glow texture framing the
--- panel. Approximates the mockup's animated box-shadow.
-function Speaketh_Theme:AddVoidGlowPulse(frame)
-    local glow = frame:CreateTexture(nil, "BACKGROUND", nil, 2)
-    glow:SetPoint("TOPLEFT",     frame, "TOPLEFT",     2, -2)
-    glow:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
-    -- Flat purple inner wash; alpha is animated for the breathing glow.
-    glow:SetColorTexture(0.30, 0.12, 0.55, 0.12)
-    glow:SetBlendMode("ADD")
-
-    local driver = frame.__voidGlowDriver
-    if not driver then
-        driver = CreateFrame("Frame", nil, frame)
-        frame.__voidGlowDriver = driver
-        driver._t = 0
-    end
-    driver:SetScript("OnUpdate", function(self, elapsed)
-        if not Speaketh_Theme:IsVoid() then return end
-        self._t = (self._t or 0) + elapsed
-        -- 4s ease-in-out-ish breath between ~0.06 and ~0.20 alpha.
-        local a = 0.13 + math.sin(self._t * (math.pi / 2)) * 0.07
-        glow:SetAlpha(a)
-    end)
-
-    self:Register(function()
-        if Speaketh_Theme:IsVoid() then glow:Show() else glow:Hide() end
-    end)
-    return glow
-end
+-- Recheck the calendar during long sessions as well as login and menu opening.
+local seasonClock=CreateFrame("Frame")
+local seasonElapsed=0
+seasonClock:SetScript("OnUpdate",function(_,elapsed)
+    seasonElapsed=seasonElapsed+elapsed
+    if seasonElapsed>=60 then seasonElapsed=0;Speaketh_Theme:CheckSeason()end
+end)

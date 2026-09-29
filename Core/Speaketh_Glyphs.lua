@@ -98,21 +98,59 @@ function Speaketh_Glyphs:BuildGlyphString(text, langKey, size)
     -- Slight per-glyph padding so adjacent runes don't collide.
     local edge = size
 
+    -- Keep text that is never spoken in the language readable: UI escapes
+    -- (item links, color codes, raid markers) would otherwise have the
+    -- letters of their control codes turned into glyphs and break, and
+    -- (OOC) or *action* spans are passed through untranslated in chat too.
+    local escapeTokens
+    if Speaketh_Translate and Speaketh_Translate.ProtectEscapes then
+        text, escapeTokens = Speaketh_Translate:ProtectEscapes(text, "\3")
+    end
+
     local out = {}
     -- Iterate by UTF-8-agnostic bytes is fine here: we only special-case ASCII
     -- A-Z; multibyte characters simply pass through as their raw bytes, which
     -- is acceptable for placeholder rendering.
-    for i = 1, #text do
+    local i = 1
+    local n = #text
+    while i <= n do
         local ch = text:sub(i, i)
-        if ch:match("[A-Za-z]") then
-            local path = GLYPH_ROOT .. folder .. "\\" .. ch:upper()
-            -- |Tpath:height:width|t  (0 width = square from height)
-            out[#out + 1] = string.format("|T%s:%d:%d|t", path, edge, edge)
+        local closeAt
+        if ch == "(" then
+            local depth, j = 1, i + 1
+            while j <= n do
+                local c = text:sub(j, j)
+                if c == "(" then depth = depth + 1
+                elseif c == ")" then
+                    depth = depth - 1
+                    if depth == 0 then break end
+                end
+                j = j + 1
+            end
+            closeAt = math.min(j, n)
+        elseif ch == "*" then
+            closeAt = text:find("*", i + 1, true) or n
+        end
+
+        if closeAt then
+            out[#out + 1] = text:sub(i, closeAt)
+            i = closeAt + 1
         else
-            out[#out + 1] = ch
+            if ch:match("[A-Za-z]") then
+                local path = GLYPH_ROOT .. folder .. "\\" .. ch:upper()
+                -- |Tpath:height:width|t  (0 width = square from height)
+                out[#out + 1] = string.format("|T%s:%d:%d|t", path, edge, edge)
+            else
+                out[#out + 1] = ch
+            end
+            i = i + 1
         end
     end
-    return table.concat(out)
+    local result = table.concat(out)
+    if escapeTokens and next(escapeTokens) then
+        result = Speaketh_Translate:RestoreEscapes(result, escapeTokens, "\3")
+    end
+    return result
 end
 
 -- Some language vocabularies deliberately expand one source word into a
@@ -280,7 +318,9 @@ local function TryDecorateBubbles()
         if fs then
             local current = fs:GetText()
             if current and current ~= "" then
-                for i = #_pendingBubbles, 1, -1 do
+                -- Oldest request first, so bubbles are matched in the order
+                -- their messages arrived.
+                for i = 1, #_pendingBubbles do
                     local req = _pendingBubbles[i]
                     -- Match on the plain (as-sent, garbled) text that WoW put
                     -- in the bubble, and only if we haven't already converted
@@ -332,10 +372,30 @@ function Speaketh_Glyphs:QueueBubble(plainText, glyphSource, langKey, sourceIsTr
     local glyph = self:BuildGlyphString(source, langKey)
     if not glyph or glyph == plainText then return end
 
+    -- The same bubble is queued more than once: by the sender's own outgoing
+    -- hook (which knows the real letters) and by the chat filter, which runs
+    -- once per chat tab and may only have the translated fallback. Keep one
+    -- request per bubble text and prefer the one built from the real letters,
+    -- so a later fallback copy can no longer override the correct glyphs.
+    local now = GetTime()
+    for _, req in ipairs(_pendingBubbles) do
+        if req.plain == plainText and now <= req.expires then
+            if req.fallback and not sourceIsTranslated then
+                req.glyph = glyph
+                req.fallback = false
+                req.expires = now + 3
+            end
+            _pollUntil = math.max(_pollUntil, now + 3)
+            _driver:Show()
+            return
+        end
+    end
+
     _pendingBubbles[#_pendingBubbles + 1] = {
-        plain   = plainText,
-        glyph   = glyph,
-        expires = GetTime() + 3,   -- bubbles usually appear within a frame or two
+        plain    = plainText,
+        glyph    = glyph,
+        fallback = sourceIsTranslated and true or false,
+        expires  = now + 3,   -- bubbles usually appear within a frame or two
     }
     _pollUntil = GetTime() + 3
     _driver:Show()

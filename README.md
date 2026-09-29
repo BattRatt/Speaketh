@@ -1,6 +1,6 @@
 # Speaketh
 
-**Version 1.2.2** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
+**Version 1.3.0** | Roleplay Language Addon for World of Warcraft | *By BattRatt*
 
 ---
 
@@ -32,9 +32,9 @@
 ### Glyphs
 
 - **Overhead glyph speech:** when enabled, other Speaketh users see your overhead speech bubble drawn as language glyph textures (one per letter) instead of scrambled text. The chat window still shows the message translated according to each listener's fluency, so glyphs convey "this is a foreign tongue" overhead while the chat box handles understanding.
-- **Per-language glyph sets:** every built-in language ships its own A-Z glyph set; custom languages fall back to the Common set.
+- **Per-language glyph sets:** 15 dedicated A–Z glyph sets ship with the addon. Languages without a supported glyph set retain normal bubble text; a language can explicitly alias a supported set.
 - **Non-disruptive:** players without Speaketh never see glyphs, only the normal scrambled text, exactly as before. Chat bubbles are unavailable inside dungeons and raids (a Blizzard restriction), where the normal text shows instead.
-- **Toggle:** turn glyphs on or off in `/sp options` under General.
+- **Toggle:** turn glyphs on or off in `/sp options` under Appearance.
 
 ### Multiplayer
 
@@ -46,13 +46,16 @@
 
 - **Passthrough words:** define words that are never translated regardless of language, useful for character names and in-game terms
 - **Minimap button:** access your language and settings at a glance
-- **Floating language HUD:** a small draggable label showing your active language
+- **Floating language HUD:** a small draggable label showing your active language; right-click opens the compact Speak window
+- **Redesigned sidebar:** Voice, Languages, Word Rules and Settings, with contextual intensity sliders
+- **Themes:** Classic, Void and an October-only Hallow's End theme
+- **WIM:** automatic character-whisper translation and tagged long-message splitting; Battle.net conversations keep WIM behavior
 
 ---
 
 ## Installation
 
-1. Download and unzip `Speaketh.zip`
+1. Download and unzip `Speaketh-1.3.0.zip`
 2. Place the `Speaketh` folder into:
    ```
    World of Warcraft/_retail_/Interface/AddOns/Speaketh
@@ -68,7 +71,11 @@
 |---|---|
 | `/sp` or `/speaketh` | Open the help screen |
 | `/sp options` | Open the settings panel |
-| `/sp window` | Open the Speak Window |
+| `/sp window` | Toggle the Speak page |
+| `/spui` | Open the Speak page |
+| `/sp learn <language> <0-100>` | Set language fluency |
+| `/sp import-overwrite <code>` | Import and replace a same-named custom language |
+| `/sp resetdialects` | Reset built-in dialect word rules |
 | `/sp <language>` | Switch to a language (e.g. `/sp orcish`) |
 | `/sp none` | Disable translation |
 | `/sp cycle` | Cycle to your next known language |
@@ -80,6 +87,10 @@
 | `/sp list` | List all languages and your fluency in each |
 
 ---
+
+## Release details
+
+See `CHANGELOG.md` for changes since 1.2.2. The supplied Interface value is 120100. Local checks use a mocked Lua runtime; verify chat, addon compatibility and layout in game before publication. Very long messages without a compatible splitter can still be shortened.
 
 ## Attributions
 

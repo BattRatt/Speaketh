@@ -41,12 +41,14 @@ local function b64enc(data)
     return table.concat(out)
 end
 
-local function b64dec(data)
+-- literal = true decodes a trailing "1"/"2" as an ordinary base64 digit
+-- instead of as the pad-count marker written by b64enc.
+local function b64dec(data, literal)
     local rev = {}
     for i = 1, #B64 do rev[B64:sub(i, i)] = i - 1 end
     local pad = 0
     local last = data:sub(-1)
-    if last == "1" or last == "2" then
+    if not literal and (last == "1" or last == "2") then
         pad  = tonumber(last)
         data = data:sub(1, -2) .. B64:sub(1, 1)  -- replace pad marker with valid char
     end
@@ -100,6 +102,10 @@ function Speaketh_Share:ExportCode(langKey)
     local name = saved.name
                  or (Speaketh and Speaketh:GetLanguageDisplayName(langKey))
                  or langKey
+    if type(name) ~= "string" or #name == 0 or #name > 64
+       or name:find(":",1,true) or name:find("|",1,true) or name:find("%c") then
+        return nil, "Language name cannot be shared; use 1–64 bytes without colons, pipes or control characters."
+    end
     local raw  = name .. ":" .. table.concat(words, ",")
     return CODE_PREFIX .. b64enc(raw) .. ":" .. checksum(raw), nil
 end
@@ -132,20 +138,34 @@ local function MakeKey(displayName)
 end
 
 function Speaketh_Share:ImportCode(code, overwrite)
+    if type(code) ~= "string" then return nil, "Paste an import code first." end
+    if not Speaketh_Char then return nil, "Speaketh is not initialized yet." end
     code = code and (code:gsub("^%s+", ""):gsub("%s+$", "")) or ""
     if code == "" then return nil, "Paste an import code first." end
 
     local encoded, cs = code:match("^SPKTH:([A-Za-z0-9%-_]+):(%x%x%x%x)$")
-    if not encoded or not cs then
+    if not encoded or not cs or #encoded % 4 ~= 0 then
         if code:sub(1, #CODE_PREFIX) ~= CODE_PREFIX then
             return nil, "Not a Speaketh import code (should start with SPKTH:)."
         end
         return nil, "Malformed code - it may be truncated. Copy the full code and try again."
     end
 
+    -- The encoder marks padding by replacing the final character with "1" or
+    -- "2", but those are also ordinary base64 digits. A code whose data
+    -- happens to end in "1"/"2" with no padding was therefore misread as
+    -- padded and rejected as corrupted (roughly 1 in 3 of those codes).
+    -- Try the padded reading first, then the literal one; the checksum
+    -- decides which is correct. Exported codes are unchanged.
     local raw = b64dec(encoded)
     if checksum(raw) ~= cs:upper() then
-        return nil, "Code is corrupted - checksum mismatch. Re-copy and try again."
+        local last = encoded:sub(-1)
+        local literal = (last == "1" or last == "2") and b64dec(encoded, true) or nil
+        if literal and checksum(literal) == cs:upper() then
+            raw = literal
+        else
+            return nil, "Code is corrupted - checksum mismatch. Re-copy and try again."
+        end
     end
 
     local name, wordstr = raw:match("^([^:]+):(.+)$")
@@ -153,11 +173,20 @@ function Speaketh_Share:ImportCode(code, overwrite)
         return nil, "Malformed payload - unrecognized code structure."
     end
     if #name > 64 then return nil, "Language name is too long." end
+    if name:find("|",1,true) or name:find("%c") or not name:find("%S") then
+        return nil, "Invalid language name."
+    end
+    for key, data in pairs(Speaketh_Languages or {}) do
+        if not data.isCustom and (data.name or key):lower() == name:lower() then
+            return nil, "That name belongs to a built-in language."
+        end
+    end
 
     local words = {}
     for w in (wordstr .. ","):gmatch("([^,]+),") do
         local clean = w:gsub("^%s+", ""):gsub("%s+$", ""):lower():gsub("[^%w'%-]", "")
-        if clean ~= "" and #words < MAX_WORDS then
+        if clean ~= "" then
+            if #words >= MAX_WORDS then return nil, "Too many words; cap is 500." end
             words[#words+1] = clean
         end
     end

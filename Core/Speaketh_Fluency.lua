@@ -10,8 +10,9 @@ end
 
 -- Sets fluency, clamped to 0-100
 function Speaketh_Fluency:Set(langKey, value)
-    if not Speaketh_Char then return end
-    Speaketh_Char.fluency[langKey] = math.max(0, math.min(100, value))
+    if not Speaketh_Char or not langKey then return end
+    Speaketh_Char.fluency = Speaketh_Char.fluency or {}
+    Speaketh_Char.fluency[langKey] = math.max(0, math.min(100, tonumber(value) or 0))
 end
 
 -- Grants fluency for a language the player just heard
@@ -29,8 +30,10 @@ function Speaketh_Fluency:Learn(langKey, gainRate)
 
     -- Notify the player
     local shown = math.floor(new)
+    local displayName = (Speaketh and Speaketh.GetLanguageDisplayName
+        and Speaketh:GetLanguageDisplayName(langKey)) or langKey
     DEFAULT_CHAT_FRAME:AddMessage(
-        string.format("|cff88ccff[Speaketh]|r You understand a little more %s. (%d%%)", langKey, shown),
+        string.format("|cff88ccff[Speaketh]|r You understand a little more %s. (%d%%)", displayName, shown),
         1, 1, 1)
 
     -- Refresh minimap tooltip if open
@@ -39,16 +42,35 @@ function Speaketh_Fluency:Learn(langKey, gainRate)
     end
 end
 
--- Called when the player sends a message in a language - ensure they have 100% in their own tongue
-function Speaketh_Fluency:EnsureNative(langKey)
-    if self:Get(langKey) < 100 then
-        self:Set(langKey, 100)
-    end
-end
+-- UnitRace() returns a LOCALIZED race name ("Elfo de la noche", "Nachtelf"),
+-- while language data lists English names. Map the locale-independent race
+-- file token (UnitRace's second return) to the English name so racial
+-- languages are seeded on every client language.
+local RACE_FILE_TO_NAME = {
+    Human = "Human", Orc = "Orc", Dwarf = "Dwarf", NightElf = "Night Elf",
+    Scourge = "Undead", Tauren = "Tauren", Gnome = "Gnome", Troll = "Troll",
+    Goblin = "Goblin", BloodElf = "Blood Elf", Draenei = "Draenei",
+    Worgen = "Worgen", Pandaren = "Pandaren", Nightborne = "Nightborne",
+    HighmountainTauren = "Highmountain Tauren", VoidElf = "Void Elf",
+    LightforgedDraenei = "Lightforged Draenei", ZandalariTroll = "Zandalari Troll",
+    KulTiran = "Kul Tiran", DarkIronDwarf = "Dark Iron Dwarf", Vulpera = "Vulpera",
+    MagharOrc = "Mag'har Orc", Mechagnome = "Mechagnome", Dracthyr = "Dracthyr",
+    EarthenDwarf = "Earthen",
+}
+
+-- Some language data lists a class rather than a race (Demonic lists
+-- "Demon Hunter"). UnitRace never returns that, so match it by class token.
+local CLASS_NAME_TO_FILE = {
+    ["Demon Hunter"] = "DEMONHUNTER",
+}
 
 -- Seed initial fluencies based on race/faction at first login
 function Speaketh_Fluency:SeedDefaults()
-    local raceName = UnitRace("player")
+    if not Speaketh_Char then return end
+    Speaketh_Char.fluency = Speaketh_Char.fluency or {}
+    local localizedRace, raceFile = UnitRace("player")
+    local raceName = (raceFile and RACE_FILE_TO_NAME[raceFile]) or localizedRace
+    local _, classFile = UnitClass("player")
     local faction  = UnitFactionGroup("player")
     local factionLanguage = faction == "Alliance" and "Common"
         or (faction == "Horde" and "Orcish")
@@ -63,7 +85,10 @@ function Speaketh_Fluency:SeedDefaults()
 
         if data.race then
             for _, r in ipairs(data.race) do
-                if r == raceName then isRacial = true end
+                if r == raceName or r == localizedRace
+                   or (classFile and CLASS_NAME_TO_FILE[r] == classFile) then
+                    isRacial = true
+                end
             end
         end
 

@@ -48,8 +48,8 @@ local DEFAULTS = {
 -- Chat types Speaketh will translate on send
 local TRANSLATE_ON_SEND = {
     SAY=true, YELL=true, PARTY=true, PARTY_LEADER=true,
-    GUILD=true, OFFICER=true, RAID=true, RAID_WARNING=true,
-    INSTANCE_CHAT=true, WHISPER=true, EMOTE=true,
+    GUILD=true, OFFICER=true, RAID=true, RAID_LEADER=true, RAID_WARNING=true,
+    INSTANCE_CHAT=true, INSTANCE_CHAT_LEADER=true, WHISPER=true, EMOTE=true,
 }
 
 -- Chat types where dialect applies only to quoted text
@@ -60,8 +60,7 @@ local DIALECT_QUOTES_ONLY = {
 -- In spoken chat, paired asterisks conventionally mark a physical action.
 -- Protect those spans from both dialect and language processing.
 local PROTECT_ASTERISK_ACTIONS = {
-    SAY=true,
-    YELL=true,
+    SAY=true, YELL=true, PARTY=true, PARTY_LEADER=true, RAID=true, RAID_LEADER=true, RAID_WARNING=true, GUILD=true, OFFICER=true, INSTANCE_CHAT=true, INSTANCE_CHAT_LEADER=true, WHISPER=true, EMOTE=true,
 }
 
 -- Maps chat types to their per-channel saved-variable toggle key.
@@ -72,10 +71,12 @@ local CHAN_KEY_MAP = {
     PARTY          = "chanParty",
     PARTY_LEADER   = "chanParty",
     RAID           = "chanRaid",
+    RAID_LEADER    = "chanRaid",
     RAID_WARNING   = "chanRaid",
     GUILD          = "chanGuild",
     OFFICER        = "chanOfficer",
     INSTANCE_CHAT  = "chanInstance",
+    INSTANCE_CHAT_LEADER = "chanInstance",
     WHISPER        = "chanWhisper",
     EMOTE          = "chanEmote",
 }
@@ -224,14 +225,102 @@ local function RestoreAsteriskActions(text, tokens)
     end))
 end
 
-local function RestoreProtectedText(text, actionTokens, oocTokens)
+-- Hyperlinks, color codes, textures and raid markers must survive every pass
+-- byte-for-byte (a modified link is rejected by the server or displays as
+-- garbage). They are protected first and restored last, using the \3 sentinel.
+local function StripEscapes(text)
+    if Speaketh_Translate and Speaketh_Translate.ProtectEscapes then
+        return Speaketh_Translate:ProtectEscapes(text, "\3")
+    end
+    return text, nil
+end
+
+local function RestoreEscapes(text, tokens)
+    if not tokens or not next(tokens) then return text end
+    return Speaketh_Translate:RestoreEscapes(text, tokens, "\3")
+end
+
+local function RestoreProtectedText(text, actionTokens, oocTokens, escapeTokens)
     text = RestoreAsteriskActions(text, actionTokens)
-    return RestoreOOC(text, oocTokens)
+    text = RestoreOOC(text, oocTokens)
+    return RestoreEscapes(text, escapeTokens)
+end
+
+-- True when text contains at least one complete "double-quoted" span. Emotes
+-- only carry translated speech inside such spans.
+local function HasQuotedSpan(text)
+    if type(text) ~= "string" then return false end
+    local qs = text:find('"', 1, true)
+    return qs ~= nil and text:find('"', qs + 1, true) ~= nil
+end
+
+-- ============================================================
+-- Speech effects that carry into a spoken language (Stutter)
+-- ============================================================
+-- When a language is active, a language-safe effect is applied to the
+-- ORIGINAL words before translation. The translator then mirrors the stutter
+-- onto the foreign words ("Y-You" -> "T-Turusal"), and fluent listeners, who
+-- read the original, see the same stutter.
+--
+-- The effect is random, but the cached original, the addon payload and any
+-- splitter preview must all agree. Results are therefore memoised briefly per
+-- input, and each output maps to itself, so re-applying is a no-op.
+local _effectMemo = {}
+local EFFECT_MEMO_TTL = 10
+
+local function ApplyOriginalSpeechEffects(text, chatType, langKey)
+    if type(text) ~= "string" or text == "" then return text end
+    if not langKey or langKey == "None" then return text end
+    if not (Speaketh_Dialects and Speaketh_Dialects.HasLanguageSafeEffect
+            and Speaketh_Dialects:HasLanguageSafeEffect()) then
+        return text
+    end
+
+    local now = GetTime()
+    for key, entry in pairs(_effectMemo) do
+        if now - entry.time > EFFECT_MEMO_TTL then _effectMemo[key] = nil end
+    end
+    chatType = chatType or "SAY"
+    local effectKey = Speaketh_Dialects:GetActiveEffect()
+    local effectLevel = Speaketh_Dialects:GetLevel(effectKey)
+    local dialectKey = Speaketh_Dialects:GetActive()
+    local dialectLevel = Speaketh_Dialects:GetLevel(dialectKey)
+    local dialectRules = ""
+    for _, rule in ipairs(Speaketh_Dialects:GetCustomSubstitutes(dialectKey) or {}) do
+        dialectRules = dialectRules .. tostring(rule[1]) .. "\030" .. tostring(rule[2]) .. "\030"
+    end
+    local ctx = tostring(dialectKey) .. ":" .. tostring(dialectLevel) .. ":" .. dialectRules .. "\031" .. chatType .. "\031" .. langKey .. "\031" .. tostring(effectKey) .. ":" .. tostring(effectLevel) .. "\031"
+    local hit = _effectMemo[ctx .. text]
+    if hit then return hit.out end
+
+    -- Never touch links, (OOC) text, or *actions* in spoken chat.
+    local body, escapeTokens = StripEscapes(text)
+    local oocTokens
+    body, oocTokens = StripOOC(body)
+    local actionTokens
+    if PROTECT_ASTERISK_ACTIONS[chatType] then
+        body, actionTokens = StripAsteriskActions(body)
+    end
+
+    if DIALECT_QUOTES_ONLY[chatType] then
+        -- Emotes: only the quoted speech stutters.
+        body = body:gsub('"([^"]*)"', function(quoted)
+            return '"' .. Speaketh_Dialects:ApplyLanguageSafeEffect(quoted) .. '"'
+        end)
+    else
+        body = Speaketh_Dialects:ApplyLanguageSafeEffect(body)
+    end
+
+    local out = RestoreProtectedText(body, actionTokens, oocTokens, escapeTokens)
+    _effectMemo[ctx .. text] = { out = out, time = now }
+    _effectMemo[ctx .. out] = { out = out, time = now }
+    return out
 end
 
 -- Apply random dialect interjections only to unprotected speech segments.
--- Without this, a placeholder representing `(OOC text)` or `*an action*`
--- could be treated as a word and receive a hiccup or similar interjection.
+-- Without this, a placeholder representing `(OOC text)`, `*an action*` or a
+-- protected link could be treated as a word and receive a hiccup or similar
+-- interjection.
 local function ApplyInterjectionsToSpeech(text, langKey)
     if not Speaketh_Dialects or not Speaketh_Dialects.ApplyInterjections then
         return text
@@ -240,7 +329,7 @@ local function ApplyInterjectionsToSpeech(text, langKey)
     local result = {}
     local pos = 1
     while pos <= #text do
-        local s, e = text:find("([\1\2])(%d+)%1", pos)
+        local s, e = text:find("([\1\2\3])(%d+)%1", pos)
         local speechEnd = s and (s - 1) or #text
         local speech = text:sub(pos, speechEnd)
         if speech:match("%a") then
@@ -369,24 +458,53 @@ local function Speaketh_GetOOBChannelIndex()
     return nil
 end
 
+-- Hide the OOB channel from every chat window so users never see traffic on
+-- it. Retail 12.x exposes this as a chat-frame method; the old global
+-- ChatFrame_RemoveChannel and NUM_CHAT_WINDOWS only exist while Blizzard's
+-- deprecation fallbacks are loaded.
+local function Speaketh_HideOOBChannel(name)
+    local numWindows = (Constants and Constants.ChatFrameConstants
+        and Constants.ChatFrameConstants.MaxChatWindows)
+        or NUM_CHAT_WINDOWS or 10
+    for i = 1, numWindows do
+        local cf = _G["ChatFrame" .. i]
+        if cf then
+            if type(cf.RemoveChannel) == "function" then
+                pcall(cf.RemoveChannel, cf, name)
+            elseif ChatFrame_RemoveChannel then
+                pcall(ChatFrame_RemoveChannel, cf, name)
+            end
+        end
+    end
+end
+
 -- Join the OOB channel silently and hide it from all chat frames.
+-- Joining is asynchronous, so success is confirmed by looking the channel up
+-- afterwards; previously the flag was set unconditionally, which made the
+-- login retry a no-op whenever the first attempt did not take.
 local function Speaketh_JoinOOBChannel()
     if _oobJoined then return end
-    if not JoinTemporaryChannel then return end
     local name = Speaketh_GetOOBChannelName()
-    -- JoinTemporaryChannel returns a type code; 0 = failure (rare)
+    if Speaketh_GetOOBChannelIndex() then
+        _oobJoined = true
+        Speaketh_HideOOBChannel(name)
+        return
+    end
+    if not JoinTemporaryChannel then return end
     local ok = pcall(JoinTemporaryChannel, name)
     if not ok then return end
 
-    -- Hide from every chat window so users never see traffic on it.
-    -- ChatFrame_RemoveChannel works on the channel name, not the index.
-    for i = 1, NUM_CHAT_WINDOWS do
-        local cf = _G["ChatFrame" .. i]
-        if cf and ChatFrame_RemoveChannel then
-            pcall(ChatFrame_RemoveChannel, cf, name)
-        end
+    Speaketh_HideOOBChannel(name)
+    if C_Timer and C_Timer.After then
+        C_Timer.After(1, function()
+            if Speaketh_GetOOBChannelIndex() then
+                _oobJoined = true
+                Speaketh_HideOOBChannel(name)
+            end
+        end)
+    else
+        _oobJoined = Speaketh_GetOOBChannelIndex() ~= nil
     end
-    _oobJoined = true
 end
 
 -- Apply dialect (and optionally language translation) only to text inside quotes,
@@ -395,11 +513,17 @@ end
 -- apostrophes in contractions (don't, I'm, Thrall's, etc.).
 -- If langKey is not "None", also translates the quoted content into the language.
 local function ApplyDialectToQuotes(text, langKey)
-    -- Protect OOC spans before processing quoted speech
+    -- Protect links/escapes, then OOC spans, before processing quoted speech
+    local escapeTokens
+    text, escapeTokens = StripEscapes(text)
     local oocTokens
     text, oocTokens = StripOOC(text)
+    local actionTokens
+    text, actionTokens = StripAsteriskActions(text)
 
     local result = {}
+    local tagSlots = {}   -- indices in `result` holding a [Language] tag
+    local quoteSlots = {} -- indices in `result` holding a translated quote
     local pos = 1
     while pos <= #text do
         -- Find the next double-quote
@@ -447,14 +571,55 @@ local function ApplyDialectToQuotes(text, langKey)
             if not processed or processed == "" or not processed:match("%S") then
                 processed = quoted
             end
-            table.insert(result, '"' .. processed .. '"')
+            if langKey ~= "None" and Speaketh_Languages[langKey] then
+                -- Show which language the quoted speech is in, just like
+                -- /say does. The tag goes INSIDE the quotes so chat addons
+                -- that color quoted emote speech (Total RP 3 colors %b"")
+                -- color the tag with it, even for players without Speaketh:
+                --     grumbled. "[Shath'Yar] Ag'rr uulwi..."
+                table.insert(result, '"')
+                table.insert(result, "[" .. Speaketh:GetLanguageDisplayName(langKey) .. "] ")
+                tagSlots[#tagSlots + 1] = #result
+                table.insert(result, processed)
+                quoteSlots[#quoteSlots + 1] = #result
+                table.insert(result, '"')
+            else
+                table.insert(result, '"' .. processed .. '"')
+            end
         else
             table.insert(result, '""')
         end
 
         pos = qEnd + 1
     end
-    return RestoreOOC(table.concat(result), oocTokens)
+    local final = RestoreProtectedText(table.concat(result), actionTokens, oocTokens, escapeTokens)
+    -- Second return value tells splitter previews the line was shortened, so
+    -- they subdivide the source instead of accepting a trimmed result.
+    local shortened = #final > 250
+    if #final > 250 and #tagSlots > 0 then
+        -- WoW drops chat lines over 255 bytes. The language tags are only a
+        -- visual hint, so drop them rather than lose the whole emote.
+        for _, i in ipairs(tagSlots) do
+            result[i] = ""
+        end
+        final = RestoreProtectedText(table.concat(result), actionTokens, oocTokens, escapeTokens)
+    end
+    -- Still too long (the translation expanded the speech): trim trailing
+    -- translated words from the last quote, as the /say length guard does,
+    -- so the emote is sent instead of being silently dropped by the server.
+    local slot = #quoteSlots
+    while #final > 255 and slot > 0 do
+        local i = quoteSlots[slot]
+        local inner = result[i]
+        local shorter = inner:match("^(.-)%s+%S+%s*$")
+        if shorter and shorter:match("%S") then
+            result[i] = shorter
+            final = RestoreProtectedText(table.concat(result), actionTokens, oocTokens, escapeTokens)
+        else
+            slot = slot - 1
+        end
+    end
+    return final, shortened
 end
 
 -- Returns the game-language metadata that must accompany the active Speaketh
@@ -474,6 +639,11 @@ end
 -- Returns CLEAN translated string - no payload.
 -- If langKey is "None", only dialect transformations are applied.
 local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
+    -- Protect hyperlinks / color codes / textures first so parentheses or
+    -- asterisks inside an item name cannot be mistaken for OOC or actions.
+    local escapeTokens
+    msg, escapeTokens = StripEscapes(msg)
+
     -- Protect OOC spans (parentheses) from dialect and translation
     local oocTokens
     msg, oocTokens = StripOOC(msg)
@@ -511,7 +681,7 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
         if not result or result == "" or not result:match("%S") then
             result = originalMsg
         end
-        local restored = RestoreProtectedText(result, actionTokens, oocTokens)
+        local restored = RestoreProtectedText(result, actionTokens, oocTokens, escapeTokens)
         return restored, nil, #restored > 250
     end
 
@@ -556,7 +726,14 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
     -- Keep the final guard active even for splitter-provided chunks. Language
     -- and dialect expansion can exceed a splitters' estimate, and WoW drops an
     -- oversized chat message entirely.
-    local exceededLengthLimit = #finalMsg > 250
+    -- Measure the length that will actually go on the wire: protected OOC
+    -- spans, actions and links are only placeholders at this point, so the
+    -- limit must be checked against the restored text.
+    local function WireLength(text)
+        return #RestoreProtectedText(text, actionTokens, oocTokens, escapeTokens)
+    end
+
+    local exceededLengthLimit = WireLength(finalMsg) > 250
     if exceededLengthLimit and not skipLengthGuard then
         -- Split the dialect-processed input into words (preserving separators)
         local words = {}
@@ -598,7 +775,7 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
                 tCandidate = Speaketh_Dialects:ApplyEffectWords(tCandidate, langKey)
             end
             tCandidate = ApplyInterjectionsToSpeech(tCandidate, langKey)
-            if #tCandidate <= LIMIT then
+            if WireLength(tCandidate) <= LIMIT then
                 bestMsg = tagPrefix .. tCandidate
                 lo = mid + 1
             else
@@ -614,14 +791,20 @@ local function BuildTranslatedMsg(msg, langKey, skipLengthGuard, protectActions)
             if Speaketh_Dialects and Speaketh_Dialects.ApplyEffectWords then
                 fallback = Speaketh_Dialects:ApplyEffectWords(fallback, langKey)
             end
-            finalMsg = (tagPrefix .. fallback):sub(1, 250)
+            -- Restore before truncating so a cut can never leave a dangling
+            -- placeholder byte in the sent message.
+            local restoredFallback = RestoreProtectedText(tagPrefix .. fallback,
+                actionTokens, oocTokens, escapeTokens)
+            return restoredFallback:sub(1, 250), (not isNativeBlizz) and langKey or nil,
+                exceededLengthLimit
         end
     end
 
+    local restoredFinal = RestoreProtectedText(finalMsg, actionTokens, oocTokens, escapeTokens)
     if isNativeBlizz then
-        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), nil, exceededLengthLimit
+        return restoredFinal, nil, exceededLengthLimit
     else
-        return RestoreProtectedText(finalMsg, actionTokens, oocTokens), langKey, exceededLengthLimit
+        return restoredFinal, langKey, exceededLengthLimit
     end
 end
 
@@ -629,29 +812,73 @@ end
 -- Uses a FIFO queue per sender so that multi-part sends (e.g. Emote Splitter
 -- splitting a long message into several sequential SendChatMessage calls) each
 -- get their own entry and can be decoded in order.
-local function CachePending(name, original, langKey)
-    if not _pendingOriginals[name] then
-        _pendingOriginals[name] = {}
+--
+-- Queues are keyed by the sender's short name ("Name") and each entry records
+-- the full "Name-Realm" it came from, when known. Keeping exactly ONE copy per
+-- message matters: the previous design queued each payload under both "Name"
+-- and "Name-Realm", and the unconsumed duplicate could later be popped for a
+-- different message from the same sender, displaying the wrong text.
+local function ShortName(name)
+    if type(name) ~= "string" then return "" end
+    return name:match("^([^-]+)") or name
+end
+
+-- Two sender identifiers refer to the same character unless both carry a
+-- realm and the realms differ (two same-named players from different realms).
+local function SameCharacter(a, b)
+    if not a or not b or a == "" or b == "" then return true end
+    local aHasRealm = a:find("-", 1, true) ~= nil
+    local bHasRealm = b:find("-", 1, true) ~= nil
+    if aHasRealm and bHasRealm then
+        return a:lower() == b:lower()
     end
-    table.insert(_pendingOriginals[name], {
+    return ShortName(a):lower() == ShortName(b):lower()
+end
+
+local PENDING_TTL = 10
+
+local function CachePending(name, original, langKey, fullName)
+    local key = ShortName(name)
+    if key == "" then return end
+    if not _pendingOriginals[key] then
+        _pendingOriginals[key] = {}
+    end
+    table.insert(_pendingOriginals[key], {
         original = original,
         langKey  = langKey,
+        from     = fullName or name,
         time     = GetTime(),
     })
 end
 
--- Peek at (but do not remove) the first matching cache entry for a sender.
-local function PeekPending(name, langTag)
-    local queue = _pendingOriginals[name]
-    if not queue then return nil end
-    local now = GetTime()
-    while queue[1] and now - queue[1].time > 10 do
+local function PrunePending(queue, now)
+    while queue[1] and now - queue[1].time > PENDING_TTL do
         table.remove(queue, 1)
     end
-    for _, entry in ipairs(queue) do
-        if entry.langKey == langTag then return entry end
+end
+
+-- Find (without removing) the oldest matching entry for a sender. When
+-- langTag is nil, the oldest entry of any language matches. An optional
+-- predicate(entry) narrows the match further (the emote filter uses it to
+-- skip entries that belong to /say, /party, etc.).
+local function FindPending(sender, langTag, predicate)
+    local queue = _pendingOriginals[ShortName(sender)]
+    if not queue then return nil end
+    PrunePending(queue, GetTime())
+    for i, entry in ipairs(queue) do
+        if (langTag == nil or entry.langKey == langTag)
+           and SameCharacter(entry.from, sender)
+           and (not predicate or predicate(entry)) then
+            return entry, i, queue
+        end
     end
     return nil
+end
+
+-- Peek at (but do not remove) the first matching cache entry for a sender.
+local function PeekPending(name, langTag)
+    if not langTag then return nil end
+    return (FindPending(name, langTag))
 end
 
 -- Keep a brief non-destructive copy after the built-in chat filter consumes a
@@ -706,43 +933,24 @@ end
 
 -- Non-destructive counterpart to PopPending. Chat events may identify the
 -- sender as either "Name" or "Name-Realm", while self-sent originals are
--- cached under UnitName("player"). Listener-style consumers must try the same
--- aliases as the built-in chat filter or their copy can remain garbled even
+-- cached under UnitName("player"). Listener-style consumers must use the same
+-- lookup as the built-in chat filter or their copy can remain garbled even
 -- while Speaketh's normal chat window successfully decodes it.
 local function PeekPendingForSender(sender, langTag)
-    local shortName = sender and (sender:match("^([^-]+)") or sender) or ""
-    local seen = {}
-
-    for _, name in ipairs({shortName, sender or ""}) do
-        if name ~= "" and not seen[name] then
-            seen[name] = true
-            local entry = PeekPending(name, langTag)
-            if entry then return entry end
-        end
-    end
+    local entry = PeekPending(sender, langTag)
+    if entry then return entry end
     return PeekRecentResolvedOriginal(sender, langTag)
 end
 
 -- Pop (remove and return) the oldest matching cache entry for a sender.
-local function PopPending(sender, langTag)
-    local now = GetTime()
-    local shortName = sender and (sender:match("^([^-]+)") or sender) or ""
-    local playerName = UnitName("player")
-    for _, name in ipairs({shortName, sender or "", playerName}) do
-        local queue = _pendingOriginals[name]
-        if queue then
-            while queue[1] and now - queue[1].time > 10 do
-                table.remove(queue, 1)
-            end
-            for i, entry in ipairs(queue) do
-                if entry.langKey == langTag then
-                    table.remove(queue, i)
-                    return entry.original
-                end
-            end
-        end
-    end
-    return nil
+-- Only the sender's own queue is consulted: falling back to the local
+-- player's queue (as older versions did) let another player's message be
+-- rewritten with text the local player had typed.
+local function PopPending(sender, langTag, predicate)
+    local entry, index, queue = FindPending(sender, langTag, predicate)
+    if not entry then return nil end
+    table.remove(queue, index)
+    return entry.original
 end
 
 -- Blizzard invokes a chat message filter once for every chat frame that is
@@ -756,7 +964,7 @@ local _resolvedIncoming = {}
 local _unknownChatFrame = {}
 local RESOLVED_INCOMING_TTL = 1
 
-local function ResolvePendingForChatFrame(frame, event, msg, sender, langTag)
+local function ResolvePendingForChatFrame(frame, event, msg, sender, langTag, predicate)
     local now = GetTime()
     local key = table.concat({event or "", sender or "", msg or ""}, "\031")
     local frameKey = frame or _unknownChatFrame
@@ -785,7 +993,7 @@ local function ResolvePendingForChatFrame(frame, event, msg, sender, langTag)
     -- resolved emote, but is not enough information to pop a new queue entry.
     if not langTag then return nil end
 
-    local original = PopPending(sender, langTag)
+    local original = PopPending(sender, langTag, predicate)
     if not original then return nil end
     RememberResolvedOriginal(sender, langTag, original)
 
@@ -817,47 +1025,94 @@ local function SafeSendAddonMessage(prefix, payload, chan, target)
     pcall(C_ChatInfo.SendAddonMessage, prefix, payload, chan, target)
 end
 
+-- Addon messages are limited to 255 bytes, but the payload is
+-- "<langKey>|<original>" and the original can itself be up to 255 bytes, so
+-- long lines used to fail silently and never decode for anyone else.
+-- Oversized payloads are now sent as numbered parts:
+--     ~M<id>:<index>:<total>~<slice of the normal payload>
+-- Older Speaketh versions parse such a part as an unknown language key and
+-- simply ignore it (their behaviour for long lines is unchanged); current
+-- versions reassemble the parts and process the normal payload.
+local ADDON_MSG_LIMIT = 255
+local _multipartId = 0
+
+local function SendPayload(payload, chan, target)
+    if #payload <= ADDON_MSG_LIMIT then
+        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, chan, target)
+        return
+    end
+    _multipartId = (_multipartId % 999) + 1
+    local sliceSize = ADDON_MSG_LIMIT - 16   -- room for the part header
+    local total = math.ceil(#payload / sliceSize)
+    if total > 9 then return end             -- never flood the channel
+    for i = 1, total do
+        local slice = payload:sub((i - 1) * sliceSize + 1, i * sliceSize)
+        SafeSendAddonMessage(SPEAKETH_PREFIX,
+            string.format("~M%d:%d:%d~", _multipartId, i, total) .. slice,
+            chan, target)
+    end
+end
+
 -- Send the original on the narrowest addon route that matches the visible
 -- chat type, and cache it locally. Proximity chat has no matching addon
 -- distribution on Retail, so SAY/YELL/EMOTE always use OOB, regardless of
 -- whether the sender is currently grouped.
 function Speaketh_SendOriginal(original, langKey, chatType, target)
-    -- Always cache locally so own messages work, regardless of network state
+    if type(original) ~= "string" or original == "" or not langKey then return end
+
+    -- Keep the original in step with the stutter used for the translation.
+    original = ApplyOriginalSpeechEffects(original, chatType, langKey)
+
+    -- An emote only carries translated speech inside "quoted" spans. With no
+    -- quotes there is nothing for any receiver to decode, and the incoming
+    -- emote filter never consumes the entry - so it would sit in the FIFO and
+    -- be popped by the NEXT /say in the same language, displaying the emote
+    -- text in place of what was actually said.
+    if chatType == "EMOTE" and not HasQuotedSpan(original) then return end
+
     local playerName = UnitName("player") or ""
-    CachePending(playerName, original, langKey)
+    local isWhisper = chatType == "WHISPER" and target and target ~= ""
+
+    -- Always cache locally so own messages work, regardless of network state.
+    -- A whisper is echoed back as CHAT_MSG_WHISPER_INFORM with sender = the
+    -- target, so it is cached under the target only; an extra copy under our
+    -- own name was never consumed and would later decode a different message.
+    if isWhisper then
+        CachePending(target, original, langKey, target)
+        if ShortName(target) == playerName then
+            -- Whispering yourself produces both an INFORM and a WHISPER
+            -- event, each of which consumes one entry.
+            CachePending(playerName, original, langKey)
+        end
+    else
+        CachePending(playerName, original, langKey)
+    end
 
     -- Never try to send before the client is fully in-world
     if not IsLoggedIn or not IsLoggedIn() then return end
 
     local payload = langKey .. "|" .. original
 
-    -- If whispering, send on whisper channel and also cache under the target
-    -- name. WoW echoes outgoing whispers back as CHAT_MSG_WHISPER_INFORM with
-    -- sender = target, so the incoming chat filter needs to find the original
-    -- keyed by the target's name rather than our own.
-    if chatType == "WHISPER" and target and target ~= "" then
-        local shortTarget = target:match("^([^-]+)") or target
-        CachePending(shortTarget, original, langKey)
-        if shortTarget ~= target then CachePending(target, original, langKey) end
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "WHISPER", target)
+    if isWhisper then
+        SendPayload(payload, "WHISPER", target)
         return
     end
 
     -- Routed channels do not need a realm-wide OOB duplicate.
     if chatType == "PARTY" or chatType == "PARTY_LEADER" then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "PARTY")
+        SendPayload(payload, "PARTY")
         return
-    elseif chatType == "RAID" or chatType == "RAID_WARNING" then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "RAID")
+    elseif chatType == "RAID" or chatType == "RAID_LEADER" or chatType == "RAID_WARNING" then
+        SendPayload(payload, "RAID")
         return
-    elseif chatType == "INSTANCE_CHAT" then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "INSTANCE_CHAT")
+    elseif chatType == "INSTANCE_CHAT" or chatType == "INSTANCE_CHAT_LEADER" then
+        SendPayload(payload, "INSTANCE_CHAT")
         return
     elseif chatType == "GUILD" then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "GUILD")
+        SendPayload(payload, "GUILD")
         return
     elseif chatType == "OFFICER" then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "OFFICER")
+        SendPayload(payload, "OFFICER")
         return
     end
 
@@ -876,7 +1131,7 @@ function Speaketh_SendOriginal(original, langKey, chatType, target)
     -- harmlessly from the cache after 10 seconds.
     local oobIdx = Speaketh_GetOOBChannelIndex()
     if oobIdx then
-        SafeSendAddonMessage(SPEAKETH_PREFIX, payload, "CHANNEL", tostring(oobIdx))
+        SendPayload(payload, "CHANNEL", tostring(oobIdx))
     end
 end
 
@@ -988,6 +1243,9 @@ local function Speaketh_ProcessOutgoing(editBox)
     end
 
     if Speaketh_Fluency:Get(langKey) == 0 then return end
+
+    -- Language-safe effects (Stutter) shape the original speech first.
+    text = ApplyOriginalSpeechEffects(text, chatType, langKey)
 
     -- Speaketh owns the language tag and scrambling for every selected language.
     -- Force the faction default here so WoW does not consume racial/faction
@@ -1177,6 +1435,7 @@ function Speaketh:TranslateChunk(msg, chatType, target)
 
     -- Language path: translate, then cache and broadcast the pre-translation
     -- chunk so each incoming [Language] message can be decoded independently.
+    msg = ApplyOriginalSpeechEffects(msg, chatType, langKey)
     local translated
     if quotesOnly then
         translated = ApplyDialectToQuotes(msg, langKey)
@@ -1229,6 +1488,7 @@ function Speaketh:TranslateOutgoing(msg, chatType)
     end
 
     -- Language translation path.
+    msg = ApplyOriginalSpeechEffects(msg, chatType, langKey)
     local translated, outLangKey
     if quotesOnly then
         translated = ApplyDialectToQuotes(msg, langKey)
@@ -1258,27 +1518,70 @@ end
 -- ============================================================
 local addonMsgFrame = CreateFrame("Frame")
 addonMsgFrame:RegisterEvent("CHAT_MSG_ADDON")
+-- Partially received multi-part payloads: ["sender\031id"] = {parts, total, time}
+local _multipartBuffers = {}
+local MULTIPART_TTL = 10
+
+local function AcceptMultipart(sender, payload)
+    local id, index, total, slice = payload:match("^~M(%d+):(%d+):(%d+)~(.*)$")
+    if not id then return payload end          -- ordinary single payload
+    index, total = tonumber(index), tonumber(total)
+    if not index or not total or total < 1 or total > 9 or index < 1 or index > total then
+        return nil
+    end
+
+    local now = GetTime()
+    for key, buf in pairs(_multipartBuffers) do
+        if now - buf.time > MULTIPART_TTL then _multipartBuffers[key] = nil end
+    end
+
+    local key = sender .. "\031" .. id
+    local buf = _multipartBuffers[key]
+    if not buf or buf.total ~= total then
+        buf = { parts = {}, total = total, count = 0, time = now }
+        _multipartBuffers[key] = buf
+    end
+    if not buf.parts[index] then
+        buf.parts[index] = slice
+        buf.count = buf.count + 1
+    end
+    if buf.count < total then return nil end
+
+    _multipartBuffers[key] = nil
+    return table.concat(buf.parts, "", 1, total)
+end
+
 addonMsgFrame:SetScript("OnEvent", function(self, event, prefix, payload, dist, sender)
     if prefix ~= SPEAKETH_PREFIX then return end
-    if not payload or payload == "" then return end
-    if not sender or sender == "" then return end
+    -- Midnight can deliver restricted ("secret") values in some contexts;
+    -- never run string operations on something we are not allowed to read.
+    if canaccessvalue and (not canaccessvalue(payload) or not canaccessvalue(sender)) then
+        return
+    end
+    if type(payload) ~= "string" or payload == "" then return end
+    if type(sender) ~= "string" or sender == "" then return end
 
-    local langKey, original = payload:match("^([^|]+)|(.+)$")
-    if not langKey or not original then return end
-
-    local shortName = sender:match("^([^-]+)") or sender
-    local playerName = UnitName("player") or ""
+    local shortName = ShortName(sender)
+    local playerName, playerRealm = UnitName("player")
+    playerName = playerName or ""
+    playerRealm = playerRealm or (GetRealmName and GetRealmName()) or ""
+    local fullPlayerName = playerName .. "-" .. playerRealm:gsub("%s+", "")
     -- Skip self-echoes. When we broadcast on GUILD/RAID/OOB/etc., WoW echoes
     -- each broadcast back to us as CHAT_MSG_ADDON. Speaketh_SendOriginal has
     -- already cached the message once under the player name; re-caching on
     -- every channel echo would stack multiple duplicate entries in the FIFO
     -- queue and cause stale or repeated chat output.
-    if shortName == playerName or sender == playerName then return end
+    if sender:lower() == playerName:lower() or sender:lower() == fullPlayerName:lower() then return end
 
-    CachePending(shortName, original, langKey)
-    if sender ~= shortName then
-        CachePending(sender, original, langKey)
-    end
+    payload = AcceptMultipart(sender, payload)
+    if not payload then return end
+
+    local langKey, original = payload:match("^([^|]+)|(.+)$")
+    if not langKey or not original then return end
+
+    -- One entry per message, keyed by short name and tagged with the full
+    -- sender so same-named players from different realms stay separate.
+    CachePending(shortName, original, langKey, sender)
 end)
 
 -- ============================================================
@@ -1289,8 +1592,13 @@ local function BlendMessages(original, translated, fluency, protectActions)
     if fluency >= 100 then return original end
     if fluency <= 0 then return translated end
 
-    -- Partial-fluency blending must not count protected OOC/action words when
-    -- aligning original and translated word positions.
+    -- Partial-fluency blending must not count protected link/OOC/action words
+    -- when aligning original and translated word positions.
+    local originalEsc
+    original, originalEsc = StripEscapes(original)
+    local translatedEsc
+    translated, translatedEsc = StripEscapes(translated)
+
     local originalOOC
     original, originalOOC = StripOOC(original)
     local translatedOOC
@@ -1337,18 +1645,20 @@ local function BlendMessages(original, translated, fluency, protectActions)
 
     local total = math.max(wordCount, #origWords)
 
-    -- Build a deterministic per-word reveal table. The old formula
-    -- (i*7 + total*13) % 100 clustered seeds around ~20 for short messages,
-    -- meaning nothing was ever revealed below ~20% fluency. Instead use a
-    -- simple LCG seeded from the message content so seeds spread uniformly
-    -- across 0-99 regardless of message length.
+    -- Build a deterministic per-word reveal table seeded from the message
+    -- content. The previous LCG ran modulo 100, where the multiplier reduces
+    -- to 25: every step collapsed onto only {23, 48, 73, 98}, so nothing was
+    -- EVER revealed at 23% fluency or below and understanding rose in 25%
+    -- jumps. Park-Miller (multiplier 16807, modulus 2^31-1) keeps the full
+    -- state space and stays exact in Lua 5.1 doubles (16807 * 2^31 < 2^53).
+    local MODULUS = 2147483647
     local seed = 0
-    for i = 1, #original do seed = (seed * 31 + original:byte(i)) % 100 end
+    for i = 1, #original do seed = (seed * 31 + original:byte(i)) % MODULUS end
+    if seed == 0 then seed = 1 end
     local revealed = {}
     for i = 1, total do
-        -- LCG step: produces a different value in 0-99 for each word index
-        seed = (seed * 1664525 + 1013904223) % 100
-        revealed[i] = (seed < fluency)
+        seed = (seed * 16807) % MODULUS
+        revealed[i] = (seed % 100) < fluency
     end
 
     local result = {}
@@ -1366,7 +1676,31 @@ local function BlendMessages(original, translated, fluency, protectActions)
         end
     end
 
-    return RestoreProtectedText(table.concat(result), translatedActions, translatedOOC)
+    return RestoreProtectedText(table.concat(result), translatedActions, translatedOOC, translatedEsc)
+end
+
+-- Passive learning must happen once per heard message and never from the
+-- player's own speech. Chat filters run once per chat frame showing the
+-- event, which previously multiplied the learning chance by the number of
+-- chat tabs, and self-echoes let a player raise fluency by talking to
+-- themselves.
+local _learnSeen = {}
+local function MaybeLearn(event, sender, msg, langKey, fluency)
+    if Speaketh_Char and Speaketh_Char.passiveLearn == false then return end
+    if fluency >= 100 then return end
+    if ShortName(sender) == (UnitName("player") or "") then return end
+
+    local now = GetTime()
+    for key, t in pairs(_learnSeen) do
+        if now - t > 1 then _learnSeen[key] = nil end
+    end
+    local key = table.concat({event or "", sender or "", msg or ""}, "\031")
+    if _learnSeen[key] then return end
+    _learnSeen[key] = now
+
+    if math.random(1, 10) == 1 then
+        Speaketh_Fluency:Learn(langKey, 1)
+    end
 end
 
 -- Incoming chat filter for fluency-based understanding.
@@ -1401,13 +1735,8 @@ local function Speaketh_ChatFilter(self, event, msg, sender, ...)
 
     local fluency = Speaketh_Fluency:Get(langKey)
 
-    -- Passive learning (respects user setting)
-    local learnEnabled = not (Speaketh_Char and Speaketh_Char.passiveLearn == false)
-    if learnEnabled and fluency < 100 then
-        if math.random(1, 10) == 1 then
-            Speaketh_Fluency:Learn(langKey, 1)
-        end
-    end
+    -- Passive learning (respects user setting; once per message; not self)
+    MaybeLearn(event, sender, msg, langKey, fluency)
 
     -- Overhead speech-bubble glyphs. Only SAY/YELL create overhead bubbles.
     -- The bubble the game shows for the speaker contains the raw incoming msg
@@ -1417,7 +1746,7 @@ local function Speaketh_ChatFilter(self, event, msg, sender, ...)
     -- in range), otherwise fall back to the garbled body so unknown speech
     -- still renders as glyphs overhead.
     if Speaketh_Glyphs and (event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL") then
-        local peek = PeekPending and PeekPending(sender, langKey)
+        local peek = PeekPendingForSender(sender, langKey)
         local glyphSource = (peek and peek.original) or body
         -- If the original payload has not arrived, tell the glyph system this
         -- is translated fallback text. It can then collapse vocabulary phrases
@@ -1432,7 +1761,7 @@ local function Speaketh_ChatFilter(self, event, msg, sender, ...)
         if fluency >= 100 then
             return false, "[" .. langTag .. "] " .. original, sender, ...
         elseif fluency > 0 then
-            local protectActions = event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL"
+            local protectActions = true
             local blended = BlendMessages(original, body, fluency, protectActions)
             return false, "[" .. langTag .. "] " .. blended, sender, ...
         end
@@ -1459,12 +1788,44 @@ local FILTER_EVENTS = {
 -- check whether the cached original for this sender contains a corresponding
 -- quoted span, and if so swap the translated text back to the original (or a
 -- fluency-blended version). The surrounding non-quoted emote text is preserved.
+-- Chat addons such as Total RP 3 color quoted emote speech, so a color code
+-- can sit between an existing [Language] tag and the opening quote:
+--     [Shath'Yar] |cffff8000"Hello."|r
+-- Split trailing color codes off a string so the tag check (and any tag we
+-- insert) is positioned before them.
+local function SplitTrailingColorCodes(str)
+    local tail = ""
+    while true do
+        local s = str:find("|c%x%x%x%x%x%x%x%x$") or str:find("|cn[^:|]*:$")
+            or str:find("|r$")
+        if not s then break end
+        tail = str:sub(s) .. tail
+        str = str:sub(1, s - 1)
+    end
+    return str, tail
+end
+
+local function StripColorCodes(str)
+    return (str:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|cn[^:|]*:", ""):gsub("|r", ""))
+end
+
+-- Display-only: show the [Language] tag in white in emote lines so it stands
+-- out from the emote color. This is applied by the chat filter when a line
+-- is displayed, never to the message that is sent (color codes are not
+-- valid in player chat, and other players' clients would not show them).
+local EMOTE_TAG_COLOR = "|cffffffff"
+
+-- Only cached originals that contain quoted speech can belong to an emote.
+local function EntryHasQuotes(entry)
+    return HasQuotedSpan(entry.original)
+end
+
 local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
     if not msg or type(msg) ~= "string" then return false end
     if not Speaketh_Languages or not Speaketh_Fluency then return false end
 
-    -- Nothing to decode unless the emote contains speech.
-    if not msg:find('"', 1, true) then return false end
+    -- Nothing to decode unless the emote contains a complete quoted span.
+    if not HasQuotedSpan(msg) then return false end
 
     -- Later chat frames can reuse the first frame's resolved original even
     -- though the FIFO entry has already been consumed.
@@ -1472,35 +1833,22 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
     if not original then
         -- The first frame still needs to discover the language from the queued
         -- emote because emotes do not carry a top-level [Language] tag.
-        local shortSender = sender and (sender:match("^([^-]+)") or sender) or sender or ""
-        local playerName = UnitName("player") or ""
-        local senderQueue = _pendingOriginals[shortSender]
-                         or _pendingOriginals[sender or ""]
-                         or _pendingOriginals[playerName]
-        if not senderQueue or not senderQueue[1] then return false end
-        local now = GetTime()
-        while senderQueue[1] and now - senderQueue[1].time > 10 do
-            table.remove(senderQueue, 1)
-        end
-        local pending = senderQueue[1]
+        -- Only this sender's own queue is considered. Falling back to the
+        -- local player's queue let any stranger's quoted emote be rewritten
+        -- with text the local player had recently typed.
+        local pending = FindPending(sender, nil, EntryHasQuotes)
         if not pending then return false end
 
         langKey = pending.langKey
         if not langKey or langKey == "None" then return false end
-        original = ResolvePendingForChatFrame(self, event, msg, sender, langKey)
+        original = ResolvePendingForChatFrame(self, event, msg, sender, langKey, EntryHasQuotes)
         if not original then return false end
     end
 
     local fluency = Speaketh_Fluency:Get(langKey)
-    if fluency == 0 then return false end
 
-    -- Passive learning
-    local learnEnabled = not (Speaketh_Char and Speaketh_Char.passiveLearn == false)
-    if learnEnabled and fluency < 100 then
-        if math.random(1, 10) == 1 then
-            Speaketh_Fluency:Learn(langKey, 1)
-        end
-    end
+    -- Passive learning (once per message; not from our own emotes)
+    MaybeLearn(event, sender, msg, langKey, fluency)
 
     -- Build a list of original quoted spans from the cached original emote
     local origQuotes = {}
@@ -1517,29 +1865,84 @@ local function Speaketh_EmoteChatFilter(self, event, msg, sender, ...)
 
     -- Replace each quoted span in the received (translated) emote with the
     -- original (or fluency-blended) text, preserving the surrounding emote.
+    -- Every decoded quote is shown as "[Language] text", with the tag inside
+    -- the quotes where current senders put it. This also adds the tag for
+    -- senders on older Speaketh versions and for lines where the tag was
+    -- dropped to fit the chat length limit.
+    local langLabel = "[" .. Speaketh:GetLanguageDisplayName(langKey) .. "]"
+    local out = {}
     local quoteIdx = 0
     local modified = false
-    local result = msg:gsub('"([^"]*)"', function(translated)
+    local pos = 1
+    while true do
+        local qs = msg:find('"', pos, true)
+        local qe = qs and msg:find('"', qs + 1, true)
+        if not qe then break end
+        local before = msg:sub(pos, qs - 1)
+        local translated = msg:sub(qs + 1, qe - 1)
         quoteIdx = quoteIdx + 1
         local orig = origQuotes[quoteIdx]
-        if not orig then return '"' .. translated .. '"' end
-        modified = true
-        if fluency >= 100 then
-            return '"' .. orig .. '"'
+
+        -- The sender's tag is not part of the speech; remove it before
+        -- decoding so the fluency blend does not count it as a word.
+        local innerTag = translated:match("^%[[^%]]+%]%s*")
+        local body = innerTag and translated:sub(#innerTag + 1) or translated
+
+        if orig and body ~= "" then
+            modified = true
+            local shown
+            if fluency >= 100 then
+                shown = orig
+            elseif fluency > 0 then
+                shown = BlendMessages(orig, body, fluency)
+            else
+                shown = body
+            end
+
+            -- Colour codes (e.g. from Total RP 3) are ignored when checking
+            -- whether a tag already sits just before the quote (the layout
+            -- used by earlier test builds).
+            local core, colorTail = SplitTrailingColorCodes(before)
+            local soFar = StripColorCodes(table.concat(out) .. core)
+            local label = ""
+            if not soFar:find("%[[^%]]+%]%s*$") then
+                if colorTail ~= "" then
+                    -- Another addon already colours this quote (TRP3 makes
+                    -- quoted speech white); the tag inherits that colour.
+                    label = langLabel .. " "
+                else
+                    -- Display-only white tag; never part of the sent text.
+                    label = EMOTE_TAG_COLOR .. langLabel .. "|r "
+                end
+            end
+            out[#out + 1] = before .. '"' .. label .. shown .. '"'
         else
-            return '"' .. BlendMessages(orig, translated, fluency) .. '"'
+            out[#out + 1] = before .. '"' .. translated .. '"'
         end
-    end)
+        pos = qe + 1
+    end
+    out[#out + 1] = msg:sub(pos)
 
     if not modified then return false end
-    return false, result, sender, ...
+    return false, table.concat(out), sender, ...
+end
+
+-- In Retail 12.x the global ChatFrame_AddMessageEventFilter only exists when
+-- the "loadDeprecationFallbacks" CVar is enabled (Blizzard_DeprecatedChatInfo)
+-- and it is scheduled for removal. Calling the missing global used to throw
+-- inside PLAYER_LOGIN, aborting the rest of initialisation (no chat filters,
+-- no minimap button, no HUD). Prefer the current ChatFrameUtil API.
+local function AddChatFilter(event, fn)
+    local add = (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter)
+        or ChatFrame_AddMessageEventFilter
+    if add then add(event, fn) end
 end
 
 local function Speaketh_RegisterChatFilters()
     for _, event in ipairs(FILTER_EVENTS) do
-        ChatFrame_AddMessageEventFilter(event, Speaketh_ChatFilter)
+        AddChatFilter(event, Speaketh_ChatFilter)
     end
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_EMOTE", Speaketh_EmoteChatFilter)
+    AddChatFilter("CHAT_MSG_EMOTE", Speaketh_EmoteChatFilter)
 end
 
 -- ============================================================
@@ -1570,13 +1973,12 @@ local function Speaketh_OOBChannelNoticeFilter(self, event, msg, _, _, _, _, _, 
 end
 
 local function Speaketh_RegisterOOBSuppressors()
-    if not ChatFrame_AddMessageEventFilter then return end
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL", Speaketh_OOBChannelFilter)
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_JOIN", Speaketh_OOBChannelNoticeFilter)
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_LEAVE", Speaketh_OOBChannelNoticeFilter)
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_NOTICE", Speaketh_OOBChannelNoticeFilter)
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_NOTICE_USER", Speaketh_OOBChannelNoticeFilter)
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_LIST", Speaketh_OOBChannelNoticeFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL", Speaketh_OOBChannelFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL_JOIN", Speaketh_OOBChannelNoticeFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL_LEAVE", Speaketh_OOBChannelNoticeFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL_NOTICE", Speaketh_OOBChannelNoticeFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL_NOTICE_USER", Speaketh_OOBChannelNoticeFilter)
+    AddChatFilter("CHAT_MSG_CHANNEL_LIST", Speaketh_OOBChannelNoticeFilter)
 end
 
 -- ============================================================
@@ -1665,8 +2067,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             Speaketh_Dialects:SeedSubstitutes()
         end
 
+        local loginVersion = C_AddOns and C_AddOns.GetAddOnMetadata
+            and C_AddOns.GetAddOnMetadata("Speaketh", "Version") or "1.3.0"
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v 1.2.2)!")
+            "|cffffcc00[Speaketh]|r Thank you for using Speaketh (v " .. loginVersion .. ")!")
 
         -- Re-register any user-created custom dialects from saved variables
         if Speaketh_Dialects and Speaketh_Dialects.SeedCustomDialects then
@@ -1746,15 +2150,15 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "ENCOUNTER_END" then
-        -- Combat / instance lockdown has begun. Translation is suspended to
-        -- avoid tainting protected frames (ADDON_ACTION_BLOCKED on SendChatMessage).
+        -- Encounter lockdown has ended; translation resumes automatically.
         if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cffffcc00[Speaketh]|r Encounter Lockdown Ended: translation resumed.")
         end
 
     elseif event == "ENCOUNTER_START" then
-        -- Combat / lockdown has ended; translation resumes automatically.
+        -- Encounter lockdown has begun. Translation is suspended to avoid
+        -- tainting protected frames (ADDON_ACTION_BLOCKED on SendChatMessage).
         if Speaketh_Char and Speaketh_Char.showLockdownNotify == true then
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cffffcc00[Speaketh]|r Encounter Lockdown Started: translation paused.")
@@ -1763,200 +2167,31 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- ============================================================
--- Splash screen - native-style, matches the Speak Window chrome
--- (dark slate backdrop, thin gold edge, gold-accent header).
--- ============================================================
-function Speaketh_UI:ShowSplash()
-    if self.SplashFrame and self.SplashFrame:IsShown() then
-        self.SplashFrame:Hide()
-        return
-    end
-
-    if not self.SplashFrame then
-        local f = CreateFrame("Frame", "SpeakethSplash", UIParent,
-            BackdropTemplateMixin and "BackdropTemplate" or nil)
-        f:SetSize(460, 476)
-        f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
-        f:SetFrameStrata("DIALOG")
-        f:SetToplevel(true)
-        f:SetMovable(true)
-        f:EnableMouse(true)
-        f:RegisterForDrag("LeftButton")
-        f:SetScript("OnDragStart", f.StartMoving)
-        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
-        f:SetClampedToScreen(true)
-
-        -- Escape closes the splash like any native Blizzard dialog.
-        tinsert(UISpecialFrames, "SpeakethSplash")
-
-        if f.SetBackdrop then
-            f:SetBackdrop({
-                bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-                tile = true, tileSize = 32, edgeSize = 12,
-                insets = { left = 4, right = 4, top = 4, bottom = 4 },
-            })
-            Speaketh_Theme:Register(function(C)
-                if not f.SetBackdropColor then return end
-                local bg, bd = C.slateBg, C.slateBorder
-                f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4])
-                f:SetBackdropBorderColor(bd[1], bd[2], bd[3], bd[4])
-            end)
-        end
-
-        -- Void-only atmospheric decoration (hidden in Classic)
-        Speaketh_Theme:AddVoidVignette(f)
-        Speaketh_Theme:AddVoidInkBleed(f)
-        Speaketh_Theme:AddVoidGlowPulse(f)
-        Speaketh_Theme:AddVoidRunes(f, 12, 24)
-
-        -- Title
-        local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        title:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -14)
-        title:SetText("Speaketh")
-        title:SetTextColor(1, 1, 1, 1)
-	
-	local versionLocal = C_AddOns.GetAddOnMetadata("Speaketh", "Version") or "?.?.?"
-        local ver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        ver:SetPoint("LEFT", title, "RIGHT", 8, -1)
-        ver:SetTextColor(0.55, 0.55, 0.60, 1)
-        ver:SetText("v" .. versionLocal .. "  -  Roleplay Language Addon")
-
-        local div1 = f:CreateTexture(nil, "ARTWORK")
-        div1:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -36)
-        div1:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -36)
-        div1:SetHeight(1)
-        Speaketh_Theme:Register(function(C)
-            local a = C.accent; div1:SetColorTexture(a[1], a[2], a[3], 0.9)
-        end)
-
-        local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-        closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
-        closeBtn:SetScript("OnClick", function() f:Hide() end)
-
-        -- Features
-        local featHead = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        featHead:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -48)
-        featHead:SetText("Features")
-        Speaketh_Theme:Register(function(C)
-            local t = C.headerGold; featHead:SetTextColor(t[1], t[2], t[3], 1)
-        end)
-
-        local features = {
-            "20+ lore-accurate racial & exotic languages",
-            "Custom languages - define your own word pools",
-            "Language sharing - export/import codes for custom languages",
-            "Dialect system - Gilnean, Troll, and more",
-            "Effects system - Drunk, Stutter, Hiss, Growl, and Lisp",
-            "Custom dialects - build your own word-swap accents",
-            "Fluency system - 0-100% per language, passive learning",
-            "Cross-player decoding - groups, whispers, /say & /yell",
-            "Passthrough words - names that never get translated",
-            "Minimap button & floating language HUD",
-        }
-
-        local lastFeature
-        for i, line in ipairs(features) do
-            local ft = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            ft:SetPoint("TOPLEFT", f, "TOPLEFT", 28, -66 - (i - 1) * 15)
-            ft:SetText("- " .. line)
-            lastFeature = ft
-        end
-
-        local div2 = f:CreateTexture(nil, "ARTWORK")
-        div2:SetPoint("TOPLEFT",  lastFeature, "BOTTOMLEFT", -14, -6)
-        div2:SetWidth(432)
-        div2:SetHeight(1)
-        Speaketh_Theme:Register(function(C)
-            local a = C.accent; div2:SetColorTexture(a[1], a[2], a[3], 0.5)
-        end)
-
-        -- Commands
-        local cmdHead = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        cmdHead:SetPoint("TOPLEFT", div2, "BOTTOMLEFT", 4, -11)
-        cmdHead:SetText("Commands")
-        Speaketh_Theme:Register(function(C)
-            local t = C.headerGold; cmdHead:SetTextColor(t[1], t[2], t[3], 1)
-        end)
-
-        local commands = {
-            {"/sp  or  /speaketh",   "Open this splash screen"},
-            {"/sp options",          "Open the settings panel"},
-            {"/sp window",           "Open the Speak Window"},
-            {"/sp <language>",       "Switch language  (e.g. /sp orcish)"},
-            {"/sp none",             "Disable translation"},
-            {"/sp cycle",            "Cycle to next known language"},
-            {"/sp dialect <name>",   "Set dialect  (gilnean, troll, etc.)"},
-            {"/sp theme <mode>",     "Change theme  (classic or void)"},
-            {"/sp drunk <0-3>",      "Set drunkenness level"},
-            {"/sp share <language>", "Generate an import code"},
-            {"/sp import <code>",    "Import a custom language"},
-            {"/sp list",             "List all languages & fluency"},
-        }
-
-        local lastCommand
-        for i, cmd in ipairs(commands) do
-            local ct = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            ct:SetPoint("TOPLEFT", cmdHead, "BOTTOMLEFT", 10, -6 - (i - 1) * 14)
-            ct:SetText(cmd[1])
-            local cd = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            cd:SetPoint("LEFT", ct, "LEFT", 170, 0)
-            cd:SetText("- " .. cmd[2])
-            cd:SetTextColor(0.70, 0.70, 0.75, 1)
-            lastCommand = ct
-        end
-
-        local div3 = f:CreateTexture(nil, "ARTWORK")
-        div3:SetPoint("TOPLEFT",  lastCommand, "BOTTOMLEFT", -14, -7)
-        div3:SetWidth(432)
-        div3:SetHeight(1)
-        Speaketh_Theme:Register(function(C)
-            local a = C.accent; div3:SetColorTexture(a[1], a[2], a[3], 0.5)
-        end)
-
-        -- Footer
-        local footer = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        footer:SetPoint("TOPLEFT", div3, "BOTTOMLEFT", 4, -11)
-        self.SplashFooter = footer
-
-        self.SplashFrame = f
-    end
-
-    -- Update footer with current language, dialect, and effect
-    local lang = Speaketh:GetLanguage()
-    local dialect = Speaketh_Dialects and Speaketh_Dialects:GetActive()
-    local footerText
-    if lang == "None" then
-        footerText = "Language: |cffffd100None|r  (no translation)"
-    else
-        local fluency = Speaketh_Fluency:Get(lang)
-        footerText = string.format(
-            "Speaking |cffffd100%s|r  (%d%% fluency)", Speaketh:GetLanguageDisplayName(lang), math.floor(fluency))
-    end
-    if dialect then
-        footerText = footerText .. "  -  Dialect: |cffffd100" ..
-            Speaketh_Dialects:GetDisplayLabel() .. "|r"
-    end
-    local effect = Speaketh_Dialects.GetActiveEffect and Speaketh_Dialects:GetActiveEffect()
-    if effect then
-        local data = Speaketh_Dialects:GetData(effect)
-        local label = data and data.name or effect
-        if data and data.usesSlider then
-            label = label .. ": " .. Speaketh_Dialects:GetSliderLabel(effect,
-                Speaketh_Dialects:GetLevel(effect))
-        end
-        footerText = footerText .. "  -  Effect: |cffffd100" .. label .. "|r"
-    end
-    self.SplashFooter:SetText(footerText)
-
-    self.SplashFrame:Show()
-end
-
--- ============================================================
 -- Slash commands
 -- ============================================================
 SLASH_SPEAKETH1 = "/speaketh"
 SLASH_SPEAKETH2 = "/sp"
+
+-- Resolve user input to a language key. Custom languages are stored under an
+-- internal key ("CustomLang_Foxy") but players know them by display name
+-- ("Foxy"), so both are matched: exact matches first, then partial matches.
+local function FindLanguageKey(input)
+    input = (input or ""):lower()
+    if input == "" then return nil end
+    for _, key in ipairs(Speaketh_LanguageOrder) do
+        if key:lower() == input
+           or Speaketh:GetLanguageDisplayName(key):lower() == input then
+            return key
+        end
+    end
+    for _, key in ipairs(Speaketh_LanguageOrder) do
+        if key:lower():find(input, 1, true)
+           or Speaketh:GetLanguageDisplayName(key):lower():find(input, 1, true) then
+            return key
+        end
+    end
+    return nil
+end
 
 SlashCmdList["SPEAKETH"] = function(msg)
     msg = strtrim(msg or "")
@@ -2034,7 +2269,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
                     "|cffffcc00[Speaketh]|r Unknown dialect: " .. rest)
             end
         end
-        if Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then
+        if Speaketh_UI and Speaketh_UI.RefreshWindow then
             Speaketh_UI:RefreshWindow()
         end
 
@@ -2046,7 +2281,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
             DEFAULT_CHAT_FRAME:AddMessage(string.format(
                 "|cffffcc00[Speaketh]|r Built-in dialect rules reset to defaults (%d rules). "
                 .. "Custom dialects were left untouched.", n or 0))
-            if Speaketh_UI and Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then
+            if Speaketh_UI and Speaketh_UI.RefreshWindow then
                 Speaketh_UI:RefreshWindow()
             end
         else
@@ -2061,7 +2296,7 @@ SlashCmdList["SPEAKETH"] = function(msg)
         local labels = {[0]="Off", [1]="Tipsy", [2]="Drunk", [3]="Smashed"}
         DEFAULT_CHAT_FRAME:AddMessage(string.format(
             "|cffffcc00[Speaketh]|r Drunkenness set to %d (%s).", level, labels[level]))
-        if Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then
+        if Speaketh_UI and Speaketh_UI.RefreshWindow then
             Speaketh_UI:RefreshWindow()
         end
 
@@ -2134,6 +2369,9 @@ SlashCmdList["SPEAKETH"] = function(msg)
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
                     "|cffffcc00[Speaketh]|r Imported (overwrite) |cff88ccff%s|r (%d words). Fluency set to 100%%.",
                     name, wc))
+                if Speaketh_Options and Speaketh_Options.RefreshCustomLanguages then
+                    pcall(function() Speaketh_Options:RefreshCustomLanguages() end)
+                end
             else
                 DEFAULT_CHAT_FRAME:AddMessage(
                     "|cffffcc00[Speaketh]|r Import failed: " .. (wc or "unknown error"))
@@ -2146,13 +2384,8 @@ SlashCmdList["SPEAKETH"] = function(msg)
         if not lang then lang = rest; amount = "100" end
         amount = tonumber(amount) or 100
 
-        -- Find matching language key (case-insensitive partial match)
-        local matched = nil
-        for _, key in ipairs(Speaketh_LanguageOrder) do
-            if key:lower():find(lang:lower(), 1, true) then
-                matched = key; break
-            end
-        end
+        -- Find matching language key (case-insensitive, display names too)
+        local matched = FindLanguageKey(lang)
 
         if matched then
             Speaketh_Fluency:Set(matched, amount)
@@ -2170,18 +2403,13 @@ SlashCmdList["SPEAKETH"] = function(msg)
         -- Check for "none" / "default" / "off" to disable translation
         if input == "none" or input == "default" or input == "off" then
             Speaketh:SetLanguage("None")
-            if Speaketh_UI.Window and Speaketh_UI.Window:IsShown() then
+            if Speaketh_UI and Speaketh_UI.RefreshWindow then
                 Speaketh_UI:RefreshWindow()
             end
             return
         end
 
-        local matched = nil
-        for _, key in ipairs(Speaketh_LanguageOrder) do
-            if key:lower():find(input, 1, true) then
-                matched = key; break
-            end
-        end
+        local matched = FindLanguageKey(input)
 
         if matched then
             if Speaketh_Fluency:Get(matched) == 0 then
@@ -2190,6 +2418,9 @@ SlashCmdList["SPEAKETH"] = function(msg)
                     "Hear it spoken to learn it.", Speaketh:GetLanguageDisplayName(matched)))
             else
                 Speaketh:SetLanguage(matched)
+                if Speaketh_UI and Speaketh_UI.RefreshWindow then
+                    Speaketh_UI:RefreshWindow()
+                end
             end
         else
             DEFAULT_CHAT_FRAME:AddMessage(
@@ -2209,6 +2440,10 @@ end
 
 function Speaketh.Internal:ApplyDialectToQuotes(text, langKey)
     return ApplyDialectToQuotes(text, langKey)
+end
+
+function Speaketh.Internal:ApplyOriginalSpeechEffects(text, chatType, langKey)
+    return ApplyOriginalSpeechEffects(text, chatType, langKey)
 end
 
 function Speaketh.Internal:BuildTranslatedMsg(text, langKey, skipLengthGuard, protectActions)
@@ -2232,20 +2467,26 @@ function Speaketh.Internal:PrepareSplitterChunk(text, chatType)
         local translated
         local oversized
         if quotesOnly then
-            translated = ApplyDialectToQuotes(text, langKey)
-            oversized = translated and #translated > 250 or false
+            local shortened
+            translated, shortened = ApplyDialectToQuotes(text, langKey)
+            oversized = shortened or (translated and #translated > 250) or false
         else
+            local _
             translated, _, oversized = BuildTranslatedMsg(
                 text, langKey, true, PROTECT_ASTERISK_ACTIONS[chatType])
         end
         return (translated and translated ~= "") and translated or text, nil, oversized
     end
 
+    -- Commit (via Speaketh_SendOriginal) resolves the same memoised stutter
+    -- for this source chunk, so preview and payload stay identical.
+    text = ApplyOriginalSpeechEffects(text, chatType, langKey)
     local translated, outLangKey, oversized
     if quotesOnly then
-        translated = ApplyDialectToQuotes(text, langKey)
+        local shortened
+        translated, shortened = ApplyDialectToQuotes(text, langKey)
         outLangKey = langKey
-        oversized = translated and #translated > 250 or false
+        oversized = shortened or (translated and #translated > 250) or false
     else
         translated, outLangKey, oversized = BuildTranslatedMsg(
             text, langKey, true, PROTECT_ASTERISK_ACTIONS[chatType])

@@ -127,28 +127,156 @@ local function TranslateWord(word, langKey)
     return MatchCase(word, result)
 end
 
--- Translate a full message, preserving item/spell links untouched
-function Speaketh_Translate:Message(msg, langKey)
-    if not langKey or not Speaketh_Languages[langKey] then return msg end
+-- ============================================================
+-- Stutter-aware word translation
+-- ============================================================
+-- A stuttered word such as "Y-You", "H-H-Hello" or "Wh-What" is one token to
+-- the word pattern, so it used to be hashed as a single unrelated word and the
+-- stutter vanished from the translated speech. Split off the repeated
+-- prefixes, translate the base word exactly as it would be translated on its
+-- own, then rebuild the stutter from the translated word's first letters:
+--     "Y-You"   -> "T-Turusal"
+--     "H-H-Hi"  -> "K-K-Kek"
+-- Only prefixes that really repeat the start of the word count, so ordinary
+-- hyphenated words ("well-known", "half-elf") are unaffected.
+local function SplitStutter(word)
+    local prefixes = {}
+    local rest = word
+    while true do
+        local p, r = rest:match("^(%a%a?%a?)%-(.+)$")
+        if not p or r:sub(1, #p):lower() ~= p:lower() then break end
+        prefixes[#prefixes + 1] = p
+        rest = r
+    end
+    if #prefixes == 0 or not rest:match("^%a") then return nil end
+    return prefixes, rest
+end
 
-    local result = {}
-    local pos = 1
+local function TranslateWordWithStutter(word, langKey)
+    local prefixes, base = SplitStutter(word)
+    if not prefixes then
+        return TranslateWord(word, langKey)
+    end
+    local translated = TranslateWord(base, langKey)
+    local lead = translated:match("^%a+") or ""
+    if lead == "" then return translated end
+    local out = {}
+    for _, p in ipairs(prefixes) do
+        local n = math.min(#p, #lead)
+        out[#out + 1] = MatchCase(p, lead:sub(1, n)) .. "-"
+    end
+    -- The first letter of the translated word follows the stutter's casing.
+    local first = translated:sub(1, 1)
+    local firstPrefix = prefixes[1]
+    if firstPrefix:sub(1, 1) == firstPrefix:sub(1, 1):upper() then
+        first = first:upper()
+    else
+        first = first:lower()
+    end
+    return table.concat(out) .. first .. translated:sub(2)
+end
 
-    while pos <= #msg do
-        local linkStart, linkEnd = string.find(msg, "|c%x+|H.-%|h.-|h|r", pos)
-        if linkStart then
-            if linkStart > pos then
-                table.insert(result, self:Segment(string.sub(msg, pos, linkStart - 1), langKey))
+-- ============================================================
+-- UI escape-sequence protection
+-- ============================================================
+-- Chat text can carry WoW UI escape sequences that must reach the server
+-- byte-for-byte: hyperlinks (items, spells, quests, achievements...), color
+-- codes, textures/atlases, Battle.net name tokens and raid-target markers.
+-- The word patterns used by translation, dialects and effects would otherwise
+-- treat the letters inside them ("cffff0000", "Hitem", "r", "skull") as words
+-- and rewrite them, which corrupts or invalidates the link.
+--
+-- Since patch 11.1.5 item links use the "|cnIQ4:" quality-color form rather
+-- than "|cffRRGGBB", so both color forms are recognised here.
+--
+-- Protected spans are replaced by a sentinel (sentinelByte .. N .. sentinelByte)
+-- that contains no letters, so every word-based pass leaves it alone.
+local ESCAPE_PATTERNS = {
+    "^|c%x%x%x%x%x%x%x%x",   -- legacy color:  |cffRRGGBB
+    "^|cn[^:|]*:",           -- modern color:  |cnIQ4:  |cnWHITE_FONT_COLOR:
+    "^|r",                   -- color reset
+    "^|H.-|h.-|h",           -- hyperlink:     |H<data>|h[<text>]|h
+    "^|T.-|t",               -- texture
+    "^|A.-|a",               -- atlas
+    "^|K.-|k",               -- Battle.net protected name
+    "^||",                   -- escaped pipe
+}
+
+local function MatchEscapeAt(text, pos)
+    local ch = text:sub(pos, pos)
+    if ch == "|" then
+        for _, pat in ipairs(ESCAPE_PATTERNS) do
+            local s, e = text:find(pat, pos)
+            if s then return e end
+        end
+    elseif ch == "{" then
+        -- Raid target markers such as {rt1}, {star}, {skull}. Only short,
+        -- purely alphanumeric brace groups are protected.
+        local s, e = text:find("^{%w+}", pos)
+        if s and (e - s) <= 12 then return e end
+    end
+    return nil
+end
+
+-- Returns text with escape spans replaced by sentinels, plus the token list.
+-- Adjacent escapes (e.g. color + link + reset) collapse into one token so a
+-- whole colored link is always restored as a single unit.
+function Speaketh_Translate:ProtectEscapes(text, sentinel)
+    sentinel = sentinel or "\3"
+    local tokens = {}
+    if type(text) ~= "string" or (not text:find("|", 1, true) and not text:find("{", 1, true)) then
+        return text, tokens
+    end
+    local out = {}
+    local pos, n = 1, 0
+    local lastWasToken = false
+    local plainStart = 1
+    while pos <= #text do
+        local e = MatchEscapeAt(text, pos)
+        if e then
+            if plainStart < pos then
+                out[#out + 1] = text:sub(plainStart, pos - 1)
+                lastWasToken = false
             end
-            table.insert(result, string.sub(msg, linkStart, linkEnd))
-            pos = linkEnd + 1
+            local span = text:sub(pos, e)
+            if lastWasToken then
+                tokens[n] = tokens[n] .. span
+            else
+                n = n + 1
+                tokens[n] = span
+                out[#out + 1] = sentinel .. n .. sentinel
+                lastWasToken = true
+            end
+            pos = e + 1
+            plainStart = pos
         else
-            table.insert(result, self:Segment(string.sub(msg, pos), langKey))
-            break
+            pos = pos + 1
         end
     end
+    if plainStart <= #text then
+        out[#out + 1] = text:sub(plainStart)
+    end
+    return table.concat(out), tokens
+end
 
-    return table.concat(result)
+function Speaketh_Translate:RestoreEscapes(text, tokens, sentinel)
+    if not tokens or not next(tokens) or type(text) ~= "string" then return text end
+    sentinel = sentinel or "\3"
+    return (text:gsub(sentinel .. "(%d+)" .. sentinel, function(idx)
+        return tokens[tonumber(idx)] or ""
+    end))
+end
+
+-- Translate a full message, preserving links, color codes, textures and raid
+-- markers untouched. Uses its own sentinel byte (\4) so it can be nested
+-- safely inside callers that already protected escapes with \3.
+function Speaketh_Translate:Message(msg, langKey)
+    if not langKey or not Speaketh_Languages[langKey] then return msg end
+    if type(msg) ~= "string" or msg == "" then return msg end
+
+    local protected, tokens = self:ProtectEscapes(msg, "\4")
+    local translated = self:Segment(protected, langKey)
+    return self:RestoreEscapes(translated, tokens, "\4")
 end
 
 -- Translate a plain text segment word-by-word, preserving spaces and punctuation
@@ -161,7 +289,7 @@ function Speaketh_Translate:Segment(text, langKey)
     end
 
     return (string.gsub(text, "([%a'%-]+)", function(word)
-        return TranslateWord(word, langKey)
+        return TranslateWordWithStutter(word, langKey)
     end))
 end
 
@@ -249,7 +377,7 @@ function Speaketh_Translate:GilneanSegment(text, langKey)
                 if ignore[word:lower()] then
                     return word
                 end
-                return TranslateWord(word, langKey)
+                return TranslateWordWithStutter(word, langKey)
             end)
         end
     end

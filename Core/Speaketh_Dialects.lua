@@ -1970,9 +1970,15 @@ function Speaketh_Dialects:SetLevel(key, level)
     if not Speaketh_Char then return end
     local field = EFFECTS[key] and "effectLevels" or "dialectLevels"
     Speaketh_Char[field] = Speaketh_Char[field] or {}
-    Speaketh_Char[field][key] = math.max(0, math.min(3, math.floor(level + 0.5)))
+    Speaketh_Char[field][key] = math.max(0, math.min(3, math.floor((tonumber(level) or 0) + 0.5)))
     if EFFECTS[key] then
-        Speaketh_Char.effect = Speaketh_Char[field][key] > 0 and key or nil
+        if Speaketh_Char[field][key] > 0 then
+            Speaketh_Char.effect = key
+        elseif Speaketh_Char.effect == key then
+            -- Only turn off THIS effect. Setting e.g. Drunk to 0 via
+            -- "/sp drunk 0" must not clear an unrelated active effect.
+            Speaketh_Char.effect = nil
+        end
     end
 end
 
@@ -2075,8 +2081,40 @@ function Speaketh_Dialects:Apply(text, langKey)
     return ApplyOne(self, text, langKey, self:GetActiveEffect())
 end
 
+-- True when the active effect should also shape speech in a language.
+function Speaketh_Dialects:HasLanguageSafeEffect()
+    local key = self:GetActiveEffect()
+    local d = key and DIALECTS[key]
+    local dialect = self:GetActive()
+    return (dialect ~= nil and self:GetLevel(dialect) > 0)
+        or (d ~= nil and EFFECTS[key] ~= nil and self:GetLevel(key) > 0)
+end
+
+-- Apply dialect and speech effects to the ORIGINAL words
+-- before translation.
+function Speaketh_Dialects:ApplyLanguageSafeEffect(text)
+    if not self:HasLanguageSafeEffect() then return text end
+    local key = self:GetActiveEffect()
+    local pieces, pos = {}, 1
+    while pos <= #text do
+        local first, last = text:find("([\1\2\3])%d+%1", pos)
+        local speech = text:sub(pos, first and first - 1 or #text)
+        if speech:match("%a") then
+            speech = ApplyOne(self, speech, nil, self:GetActive())
+            speech = ApplyOne(self, speech, nil, key)
+            speech = self:ApplyLanguageEffectInterjections(speech)
+        end
+        pieces[#pieces+1] = speech
+        if not first then break end
+        pieces[#pieces+1] = text:sub(first,last)
+        pos = last + 1
+    end
+    return table.concat(pieces)
+end
+
 function Speaketh_Dialects:ApplyEffectWords(text, langKey)
-    if langKey and langKey ~= "None" then return text end
+    -- Stutter is already mirrored by the language translator.
+    if langKey and langKey ~= "None" and self:GetActiveEffect() == "Stutter" then return text end
     return ApplyOne(self, text, langKey, self:GetActiveEffect())
 end
 
@@ -2101,48 +2139,70 @@ local function ApplyInterjectionsOne(self, text, key)
 
     if not intTable or #intTable == 0 then return text end
 
-    local words = {}
-    for word in text:gmatch("%S+") do
-        table.insert(words, word)
+    -- Insert interjections between words while preserving the ORIGINAL
+    -- whitespace. Rebuilding with table.concat(words, " ") used to drop
+    -- leading/trailing spaces, which glued speech to protected (OOC) and
+    -- *action* spans ("Hello(brb)there") and collapsed intentional spacing.
+    local wordEnds = {}
+    for _, e in text:gmatch("()%S+()") do
+        table.insert(wordEnds, e)
     end
+    local numWords = #wordEnds
 
-    local result = {}
-    for i, word in ipairs(words) do
-        table.insert(result, word)
-        if i < #words and math.random(1,100) <= chance then
-            table.insert(result, intTable[math.random(1, #intTable)])
+    local pieces = {}
+    local pos = 1
+    local inserted = false
+    for i, e in ipairs(wordEnds) do
+        if i < numWords and math.random(1,100) <= chance then
+            table.insert(pieces, text:sub(pos, e - 1))
+            table.insert(pieces, " " .. intTable[math.random(1, #intTable)])
+            pos = e
+            inserted = true
         end
     end
-
-    if endChance > 0 and math.random(1,100) <= endChance then
-        table.insert(result, intTable[math.random(1, #intTable)])
+    local endInterjection
+    if endChance > 0 and numWords > 0 and math.random(1,100) <= endChance then
+        endInterjection = intTable[math.random(1, #intTable)]
     end
 
-    local out = table.concat(result, " ")
+    if not inserted and not endInterjection then
+        return text
+    end
+
+    if endInterjection then
+        -- Attach after the last word, before any trailing whitespace.
+        local lastEnd = wordEnds[numWords]
+        table.insert(pieces, text:sub(pos, lastEnd - 1))
+        table.insert(pieces, " " .. endInterjection)
+        pos = lastEnd
+    end
+    table.insert(pieces, text:sub(pos))
+    local out = table.concat(pieces)
 
     -- Length safety net. WoW silently drops chat messages over 255 bytes and
     -- rapid oversized sends trip the server flood-protection (the rate-limit
     -- the user hit). Slurring + hiccups can push a long line over. If we're
-    -- near the limit, first rebuild WITHOUT the added interjections (they're
-    -- the cheapest thing to sacrifice), and only hard-trim as a last resort.
+    -- near the limit, first return the text WITHOUT the added interjections
+    -- (they're the cheapest thing to sacrifice), and only hard-trim as a last
+    -- resort.
     local SAFE = 240  -- leave headroom for any OOC tag / prefix added later
     if #out > SAFE then
-        local plain = table.concat(words, " ")
-        if #plain <= SAFE then
-            return plain
-        end
-        -- Even the slurred text alone is too long: trim on a word boundary.
-        local trimmed = plain:sub(1, SAFE)
-        trimmed = trimmed:gsub("%s+%S*$", "")  -- don't cut mid-word
-        if trimmed:match("%S") then return trimmed end
-        return plain:sub(1, SAFE)
+        -- Drop the interjections rather than cutting the player's own words
+        -- (a hard trim here could also split a protected-span placeholder).
+        -- The caller's final length guard still handles over-long lines.
+        return text
     end
 
     return out
 end
 
+function Speaketh_Dialects:ApplyLanguageEffectInterjections(text)
+    text = ApplyInterjectionsOne(self, text, self:GetActive())
+    return ApplyInterjectionsOne(self, text, self:GetActiveEffect())
+end
+
 function Speaketh_Dialects:ApplyInterjections(text, langKey)
-    if langKey and langKey ~= "None" then return text end
+    if langKey and langKey ~= "None" then return self:ApplyLanguageEffectInterjections(text) end
     text = ApplyInterjectionsOne(self, text, self:GetActive())
     return ApplyInterjectionsOne(self, text, self:GetActiveEffect())
 end
