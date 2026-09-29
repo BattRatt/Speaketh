@@ -90,7 +90,7 @@
 
 ## Release details
 
-See `CHANGELOG.md` for changes since 1.2.2. The supplied Interface value is 120100. Local checks use a mocked Lua runtime; verify chat, addon compatibility and layout in game before publication. Very long messages without a compatible splitter can still be shortened.
+See `CHANGELOG.md` for changes since 1.2.2. 
 
 ## Attributions
 
