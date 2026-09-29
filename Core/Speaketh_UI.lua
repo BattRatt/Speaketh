@@ -44,7 +44,7 @@ function Speaketh_UI:CreateMinimapButton()
     logo:SetSize(28, 28)
     logo:SetPoint("CENTER", btn, "CENTER", 0, 0)
     Speaketh_Theme:Register(function()
-        logo:SetTexture("Interface\\AddOns\\Speaketh\\Resources\\Brand\\" .. (Speaketh_Theme:Current() .. "32"))
+        logo:SetTexture("Interface\\AddOns\\Speaketh\\Resources\\Logos\\" .. (Speaketh_Theme:Current() .. "32"))
     end)
 
     local angle = (Speaketh_Char and Speaketh_Char.minimapAngle) or BUTTON_ANGLE

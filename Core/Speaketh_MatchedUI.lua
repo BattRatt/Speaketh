@@ -4,7 +4,7 @@ local U={views={},paint={},key="speak",selectedLanguage="Common",selectedDialect
 Speaketh_ReviewUI=U
 local W,H,CW=704,670,485
 local VERSION=(C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("Speaketh","Version")) or "1.3.0"
-local ART="Interface\\AddOns\\Speaketh\\Resources\\Matched\\"
+local ART="Interface\\AddOns\\Speaketh\\Resources\\UI\\"
 local BODY="Fonts\\ARIALN.TTF"
 local SERIF="Fonts\\FRIZQT__.TTF"
 local palettes={
@@ -646,7 +646,7 @@ function Speaketh_UI:ShowSplash()
     solid(f,1,1,558,106,"raised",.55)
     solid(f,0,108,560,1,"edge")
     local logo=f:CreateTexture(nil,"ARTWORK");logo:SetPoint("TOPLEFT",24,-18);logo:SetSize(72,72);logo:SetAlpha(.62)
-    bind(function()logo:SetTexture("Interface\\AddOns\\Speaketh\\Resources\\Brand\\"..theme())end)
+    bind(function()logo:SetTexture("Interface\\AddOns\\Speaketh\\Resources\\Logos\\"..theme())end)
     decorate(f,560,108)
     label(f,"SPEAKETH",116,34,350,25,"accent",true)
     label(f,VERSION,117,68,180,12,"sub")
